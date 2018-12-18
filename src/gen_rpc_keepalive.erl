@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2013-2017 EMQ Enterprise, Inc. (http://emqtt.io)
+%% Copyright (c) 2013-2018 EMQ Enterprise, Inc. (http://emqtt.io)
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -16,12 +16,9 @@
 
 %% @doc Client Keepalive
 
-%% Copied from emqttd
-%% -module(emqttd_keepalive).
-%%
 -module(gen_rpc_keepalive).
 
--author("Feng Lee <feng@emqtt.io>").
+-author("Feng Lee <feng@emqx.io>").
 
 -export([start/3, check/1, cancel/1, resume/1]).
 
