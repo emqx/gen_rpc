@@ -210,9 +210,9 @@ set_socket_keepalive({unix, darwin}, Socket) ->
     {ok, KeepInterval} = application:get_env(?APP, socket_keepalive_interval),
     {ok, KeepCount} = application:get_env(?APP, socket_keepalive_count),
     ok = inet:setopts(Socket, [{raw, ?DARWIN_SOL_SOCKET, ?DARWIN_SO_KEEPALIVE, <<1:32/native>>}]),
-    ok = inet:setopts(Socket, [{raw, ?DARWIN_SOL_SOCKET, ?DARWIN_TCP_KEEPIDLE, <<KeepIdle:32/native>>}]),
-    ok = inet:setopts(Socket, [{raw, ?DARWIN_SOL_SOCKET, ?DARWIN_TCP_KEEPINTVL, <<KeepInterval:32/native>>}]),
-    ok = inet:setopts(Socket, [{raw, ?DARWIN_SOL_SOCKET, ?DARWIN_TCP_KEEPCNT, <<KeepCount:32/native>>}]),
+    ok = inet:setopts(Socket, [{raw, ?DARWIN_IPPROTO_TCP, ?DARWIN_TCP_KEEPIDLE, <<KeepIdle:32/native>>}]),
+    ok = inet:setopts(Socket, [{raw, ?DARWIN_IPPROTO_TCP, ?DARWIN_TCP_KEEPINTVL, <<KeepInterval:32/native>>}]),
+    ok = inet:setopts(Socket, [{raw, ?DARWIN_IPPROTO_TCP, ?DARWIN_TCP_KEEPCNT, <<KeepCount:32/native>>}]),
     ok;
 
 set_socket_keepalive({unix, linux}, Socket) ->
@@ -220,9 +220,9 @@ set_socket_keepalive({unix, linux}, Socket) ->
     {ok, KeepInterval} = application:get_env(?APP, socket_keepalive_interval),
     {ok, KeepCount} = application:get_env(?APP, socket_keepalive_count),
     ok = inet:setopts(Socket, [{raw, ?LINUX_SOL_SOCKET, ?LINUX_SO_KEEPALIVE, <<1:32/native>>}]),
-    ok = inet:setopts(Socket, [{raw, ?LINUX_SOL_SOCKET, ?LINUX_TCP_KEEPIDLE, <<KeepIdle:32/native>>}]),
-    ok = inet:setopts(Socket, [{raw, ?LINUX_SOL_SOCKET, ?LINUX_TCP_KEEPINTVL, <<KeepInterval:32/native>>}]),
-    ok = inet:setopts(Socket, [{raw, ?LINUX_SOL_SOCKET, ?LINUX_TCP_KEEPCNT, <<KeepCount:32/native>>}]),
+    ok = inet:setopts(Socket, [{raw, ?LINUX_SOL_TCP, ?LINUX_TCP_KEEPIDLE, <<KeepIdle:32/native>>}]),
+    ok = inet:setopts(Socket, [{raw, ?LINUX_SOL_TCP, ?LINUX_TCP_KEEPINTVL, <<KeepInterval:32/native>>}]),
+    ok = inet:setopts(Socket, [{raw, ?LINUX_SOL_TCP, ?LINUX_TCP_KEEPCNT, <<KeepCount:32/native>>}]),
     ok;
 
 set_socket_keepalive(_Unsupported, _Socket) ->
