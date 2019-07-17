@@ -4,6 +4,8 @@
 %%% Copyright 2015 Panagiotis Papadomitsos. All Rights Reserved.
 %%%
 
+-define(SSL_DEFAULT_ACTIVE_N, 1000).
+
 %%% Default SSL options common to client and server
 -define(SSL_DEFAULT_COMMON_OPTS, [binary,
         {packet,0},
@@ -16,7 +18,6 @@
         {reuseaddr,true}, % Reuse local port numbers
         {keepalive,true}, % Keep our channel open
         {tos,72}, % Deliver immediately
-        {active,false},
         %% SSL options
         {ciphers,["ECDHE-ECDSA-AES256-GCM-SHA384","ECDHE-RSA-AES256-GCM-SHA384",
                   "ECDHE-ECDSA-AES256-SHA384","ECDHE-RSA-AES256-SHA384","ECDHE-ECDSA-DES-CBC3-SHA",
@@ -34,7 +35,7 @@
         {versions,['tlsv1.2','tlsv1.1']},
         {verify,verify_peer},
         {hibernate_after,600000},
-        {active,false}]).
+        {active,?SSL_DEFAULT_ACTIVE_N}]).
 
 -define(SSL_DEFAULT_SERVER_OPTS, [{fail_if_no_peer_cert,true},
         {log_alert,false},
@@ -43,3 +44,4 @@
 
 -define(SSL_DEFAULT_CLIENT_OPTS, [{server_name_indication,disable},
         {depth,99}]).
+

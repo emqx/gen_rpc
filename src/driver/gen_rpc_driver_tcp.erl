@@ -64,7 +64,7 @@ accept(Socket) when is_port(Socket) ->
 
 -spec activate_socket(port()) -> ok.
 activate_socket(Socket) when is_port(Socket) ->
-    ok = inet:setopts(Socket, [{active,once}]),
+    ok = inet:setopts(Socket, [{active, ?TCP_DEFAULT_ACTIVE_N}]),
     ok.
 
 -spec send(port(), binary()) -> ok | {error, term()}.
@@ -137,7 +137,7 @@ authenticate_client(Socket, Peer, Data) ->
                 ok ->
                     ?log(debug, "event=transmission_succeeded socket=\"~s\" peer=\"~s\"",
                          [gen_rpc_helper:socket_to_string(Socket), gen_rpc_helper:peer_to_string(Peer)]),
-                    ok = activate_socket(Socket),
+                    %% ok = activate_socket(Socket),
                     ok
             end,
             Result;
