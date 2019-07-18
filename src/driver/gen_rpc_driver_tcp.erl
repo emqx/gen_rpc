@@ -71,13 +71,13 @@ activate_socket(Socket) when is_port(Socket) ->
 send(Socket, Data) when is_port(Socket), is_binary(Data) ->
     case gen_tcp:send(Socket, Data) of
         {error, timeout} ->
-            %?log(error, "event=send_data_failed socket=\"~s\" reason=\"timeout\"", [gen_rpc_helper:socket_to_string(Socket)]),
+            ?log(error, "event=send_data_failed socket=\"~s\" reason=\"timeout\"", [gen_rpc_helper:socket_to_string(Socket)]),
             {error, {badtcp,send_timeout}};
         {error, Reason} ->
-            %?log(error, "event=send_data_failed socket=\"~s\" reason=\"~p\"", [gen_rpc_helper:socket_to_string(Socket), Reason]),
+            ?log(error, "event=send_data_failed socket=\"~s\" reason=\"~p\"", [gen_rpc_helper:socket_to_string(Socket), Reason]),
             {error, {badtcp,Reason}};
         ok ->
-            %?log(debug, "event=send_data_succeeded socket=\"~s\"", [gen_rpc_helper:socket_to_string(Socket)]),
+            ?log(debug, "event=send_data_succeeded socket=\"~s\"", [gen_rpc_helper:socket_to_string(Socket)]),
             ok
     end.
 
