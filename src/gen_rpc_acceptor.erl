@@ -13,7 +13,7 @@
 -behaviour(gen_statem).
 
 %%% Include the HUT library
--include("hut.hrl").
+-include("logger.hrl").
 %%% Include this library's name macro
 -include("app.hrl").
 
@@ -110,7 +110,7 @@ waiting_for_auth(info, {DriverError, Socket, _Reason} = Msg, #state{socket=Socke
     handle_event(info, Msg, waiting_for_auth, State).
 
 waiting_for_data(info, {Driver,Socket,Data},
-                 #state{socket=Socket, driver=Driver, driver_mod=DriverMod, peer=Peer, control=Control, list=List} = State) ->
+                 #state{socket=Socket, driver=Driver, driver_mod=_DriverMod, peer=Peer, control=Control, list=List} = State) ->
     %% The meat of the whole project: process a function call and return
     %% the data
     try erlang:binary_to_term(Data) of
@@ -123,18 +123,15 @@ waiting_for_data(info, {Driver,Socket,Data},
                             WorkerPid = erlang:spawn(?MODULE, call_worker, [self(), CallType, RealM, F, A, Caller]),
                             ?log(debug, "event=call_received driver=~s socket=\"~s\" peer=\"~s\" caller=\"~p\" worker_pid=\"~p\"",
                                  [Driver, gen_rpc_helper:socket_to_string(Socket), gen_rpc_helper:peer_to_string(Peer), Caller, WorkerPid]),
-                            ok = DriverMod:activate_socket(Socket),
                             {keep_state_and_data, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
                         false ->
                             ?log(debug, "event=incompatible_module_version driver=~s socket=\"~s\" method=~s module=~s",
                                  [Driver, gen_rpc_helper:socket_to_string(Socket), CallType, RealM]),
-                            ok = DriverMod:activate_socket(Socket),
                             waiting_for_data(info, {CallType, Caller, {badrpc,incompatible}}, State)
                     end;
                 false ->
                     ?log(debug, "event=request_not_allowed driver=~s socket=\"~s\" control=~s method=~s module=~s",
                          [Driver, gen_rpc_helper:socket_to_string(Socket), Control, CallType, RealM]),
-                    ok = DriverMod:activate_socket(Socket),
                     waiting_for_data(info, {CallType, Caller, {badrpc,unauthorized}}, State)
             end;
         {cast, M, F, A} ->
@@ -154,7 +151,6 @@ waiting_for_data(info, {Driver,Socket,Data},
                     ?log(debug, "event=request_not_allowed driver=~s socket=\"~s\" control=~s method=cast module=~s",
                          [Driver, gen_rpc_helper:socket_to_string(Socket), Control, RealM])
             end,
-            ok = DriverMod:activate_socket(Socket),
             {keep_state_and_data, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
         {abcast, Name, Msg} ->
             _Result = case check_if_module_allowed(erlang, Control, List) of
@@ -166,7 +162,6 @@ waiting_for_data(info, {Driver,Socket,Data},
                     ?log(debug, "event=request_not_allowed driver=~s socket=\"~s\" control=~s method=~s",
                          [Driver, gen_rpc_helper:socket_to_string(Socket), Control, abcast])
                 end,
-            ok = DriverMod:activate_socket(Socket),
             {keep_state_and_data, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
         {sbcast, Name, Msg, Caller} ->
             Reply = case check_if_module_allowed(erlang, Control, List) of
@@ -182,12 +177,10 @@ waiting_for_data(info, {Driver,Socket,Data},
                          [Driver, gen_rpc_helper:socket_to_string(Socket), Control, sbcast]),
                      error
             end,
-            ok = DriverMod:activate_socket(Socket),
             waiting_for_data(info, {sbcast, Caller, Reply}, State);
         ping ->
             ?log(debug, "event=ping_received driver=~s socket=\"~s\" peer=\"~s\" action=ignore",
                  [Driver, gen_rpc_helper:socket_to_string(Socket), gen_rpc_helper:peer_to_string(Peer)]),
-            ok = DriverMod:activate_socket(Socket),
             {keep_state_and_data, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
         OtherData ->
             ?log(debug, "event=erroneous_data_received driver=~s socket=\"~s\" peer=\"~s\" data=\"~p\"",

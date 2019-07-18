@@ -11,7 +11,7 @@
 -behaviour(supervisor).
 
 %%% Include the HUT library
--include("hut.hrl").
+-include("logger.hrl").
 %%% Include helpful guard macros
 -include("guards.hrl").
 %%% Include helpful guard macros

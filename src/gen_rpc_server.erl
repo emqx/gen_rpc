@@ -13,7 +13,7 @@
 -behaviour(gen_statem).
 
 %%% Include the HUT library
--include("hut.hrl").
+-include("logger.hrl").
 %%% Include this library's name macro
 -include("app.hrl").
 

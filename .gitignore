@@ -25,3 +25,4 @@ rebar
 .exrc
 Makefile.orig.mk
 gen_rpc.d
+.rebar3/
