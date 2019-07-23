@@ -57,7 +57,7 @@
         %% Client connect timeout
         {connect_timeout, 5000},
         %% Client and Server send timeout
-        {send_timeout, 30000},
+        {send_timeout, 5000},
         %% Authentication timeout
         {authentication_timeout, 5000},
         %% Default receive timeout for call() functions

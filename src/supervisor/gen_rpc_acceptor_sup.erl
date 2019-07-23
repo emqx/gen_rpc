@@ -53,11 +53,11 @@ init([]) ->
     SupFlags = #{strategy => simple_one_for_one,
                  intensity => 100,
                  period => 1},
-    ChildSpecs = #{id => gen_rpc_acceptor,
-                   start => {gen_rpc_acceptor,start_link,[]},
-                   restart => permanent,
-                   shutdown => 5000,
-                   type => worker,
-                   modules => [gen_rpc_acceptor]},
+    ChildSpecs = [#{id => gen_rpc_acceptor,
+                    start => {gen_rpc_acceptor,start_link,[]},
+                    restart => permanent,
+                    shutdown => 5000,
+                    type => worker,
+                    modules => [gen_rpc_acceptor]}],
     {ok, {SupFlags, ChildSpecs}}.
 
