@@ -82,11 +82,13 @@ callback_mode() ->
     state_functions.
 
 waiting_for_socket({call,From}, {socket_ready,Socket}, #state{driver=Driver, driver_mod=DriverMod, peer=Peer} = State) ->
-    % Now we own the socket
-    ?log(debug, "event=acquiring_socket_ownership driver=~s socket=\"~s\" peer=\"~p\"",
-         [Driver, gen_rpc_helper:socket_to_string(Socket), gen_rpc_helper:peer_to_string(Peer)]),
     ok = DriverMod:set_acceptor_opts(Socket),
     ok = DriverMod:activate_socket(Socket),
+    % Now we own the socket
+    ?log(debug, "event=acquiring_socket_ownership driver=~s socket=\"~s\" peer=\"~p\" inet_opts: ~0p",
+         [Driver, gen_rpc_helper:socket_to_string(Socket),
+          gen_rpc_helper:peer_to_string(Peer),
+          prim_inet:getopts(Socket, [gen_rpc_helper:user_tcp_opt_key(Opt)|| Opt <- ?USER_TCP_OPTS])]),
     ok = gen_statem:reply(From, ok),
     {next_state, waiting_for_auth, State#state{socket=Socket}, gen_rpc_helper:get_authentication_timeout()}.
 
@@ -140,7 +142,7 @@ waiting_for_data(info, {Driver,Socket,Data},
                 true ->
                     case ModVsnAllowed of
                         true ->
-                            ?log(debug, "event=cast_received driver=~s socket=\"~s\" peer=\"~s\" module=~s function=~s args=\"~p\"",
+                            ?log(debug, "event=cast_received driver=~s socket=\"~s\" peer=\"~s\" module=~s function=~s args=\"~0p\"",
                                  [Driver, gen_rpc_helper:socket_to_string(Socket), gen_rpc_helper:peer_to_string(Peer), RealM, F, A]),
                             _Pid = erlang:spawn(RealM, F, A);
                         false ->
@@ -245,7 +247,7 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%% ===================================================
 %% Process an RPC call request outside of the state machine
 call_worker(Server, CallType, M, F, A, Caller) ->
-    ?log(debug, "event=call_received caller=\"~p\" module=~s function=~s args=\"~p\"", [Caller, M, F, A]),
+    ?log(debug, "event=call_received caller=\"~p\" module=~s function=~s args=\"~0p\"", [Caller, M, F, A]),
     % If called MFA return exception, not of type term().
     % This fails term_to_binary coversion, crashes process
     % and manifest as timeout. Wrap inside anonymous function with catch

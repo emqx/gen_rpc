@@ -408,7 +408,7 @@ terminate(_Reason, #state{keepalive=KeepAlive}) ->
 %%% ===================================================
 send_cast(PacketTuple, #state{socket=Socket, driver=Driver, driver_mod=DriverMod} = State, SendTO, Activate) ->
     Packet = erlang:term_to_binary(PacketTuple),
-    ?log(debug, "event=constructing_cast_term driver=~s socket=\"~s\" cast=\"~p\"",
+    ?log(debug, "event=constructing_cast_term driver=~s socket=\"~s\" cast=\"~0p\"",
          [Driver, gen_rpc_helper:socket_to_string(Socket), PacketTuple]),
     ok = DriverMod:set_send_timeout(Socket, SendTO),
     case DriverMod:send(Socket, Packet) of

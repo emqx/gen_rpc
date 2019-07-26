@@ -24,6 +24,8 @@
         make_process_name/2,
         is_driver_enabled/1,
         merge_sockopt_lists/2,
+        get_user_tcp_opts/0,
+        user_tcp_opt_key/1,
         get_server_driver_options/1,
         get_client_config_per_node/1,
         get_client_driver_options/1,
@@ -248,3 +250,18 @@ hybrid_proplist_compare({K1,_V1}, {K2,_V2}) ->
 
 hybrid_proplist_compare(K1, K2) ->
     K1 =< K2.
+
+get_user_tcp_opts() ->
+    get_user_tcp_opts(?USER_TCP_OPTS).
+get_user_tcp_opts(Keys) ->
+    lists:foldl(
+        fun(Key, OptAcc) ->
+            case application:get_env(?APP, Key) of
+                undefined -> OptAcc;
+                {ok, Val} -> [{user_tcp_opt_key(Key), Val} | OptAcc]
+            end
+        end, [], Keys).
+
+user_tcp_opt_key(socket_buffer) -> buffer;
+user_tcp_opt_key(socket_recbuf) -> recbuf;
+user_tcp_opt_key(socket_sndbuf) -> sndbuf.
