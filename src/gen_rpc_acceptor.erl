@@ -136,23 +136,11 @@ waiting_for_data(info, {Driver,Socket,Data},
                          [Driver, gen_rpc_helper:socket_to_string(Socket), Control, CallType, RealM]),
                     waiting_for_data(info, {CallType, Caller, {badrpc,unauthorized}}, State)
             end;
-        {cast, M, F, A} ->
-            {ModVsnAllowed, RealM} = check_module_version_compat(M),
-            _Result = case check_if_module_allowed(RealM, Control, List) of
-                true ->
-                    case ModVsnAllowed of
-                        true ->
-                            ?log(debug, "event=cast_received driver=~s socket=\"~s\" peer=\"~s\" module=~s function=~s args=\"~0p\"",
-                                 [Driver, gen_rpc_helper:socket_to_string(Socket), gen_rpc_helper:peer_to_string(Peer), RealM, F, A]),
-                            _Pid = erlang:spawn(RealM, F, A);
-                        false ->
-                            ?log(debug, "event=incompatible_module_version driver=~s socket=\"~s\" module=~s",
-                                 [Driver, gen_rpc_helper:socket_to_string(Socket), RealM])
-                    end;
-                false ->
-                    ?log(debug, "event=request_not_allowed driver=~s socket=\"~s\" control=~s method=cast module=~s",
-                         [Driver, gen_rpc_helper:socket_to_string(Socket), Control, RealM])
-            end,
+        {cast, _M, _F, _A} = Cast ->
+            handle_cast(Cast, State),
+            {keep_state_and_data, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
+        BatchCast when is_list(BatchCast) ->
+            [handle_cast(Cast, State) || Cast <- BatchCast],
             {keep_state_and_data, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
         {abcast, Name, Msg} ->
             _Result = case check_if_module_allowed(erlang, Control, List) of
@@ -302,3 +290,23 @@ check_module_version_compat({M, Version}) ->
 
 check_module_version_compat(M) ->
     {true, M}.
+
+handle_cast({cast, M, F, A}, #state{socket=Socket, driver=Driver, peer=Peer, control=Control, list=List}) ->
+    {ModVsnAllowed, RealM} = check_module_version_compat(M),
+    case check_if_module_allowed(RealM, Control, List) of
+        true ->
+            case ModVsnAllowed of
+                true ->
+                    ?log(debug, "event=cast_received driver=~s socket=\"~s\" peer=\"~s\" module=~s function=~s args=\"~0p\"", [Driver, gen_rpc_helper:socket_to_string(Socket), gen_rpc_helper:peer_to_string(Peer), RealM, F, A]),
+                    _Pid = erlang:spawn(RealM, F, A);
+                false ->
+                    ?log(debug, "event=incompatible_module_version driver=~s socket=\"~s\" module=~s",[Driver, gen_rpc_helper:socket_to_string(Socket), RealM])
+            end;
+        false ->
+            ?log(debug, "event=request_not_allowed driver=~s socket=\"~s\" control=~s method=cast module=~s",[Driver, gen_rpc_helper:socket_to_string(Socket), Control, RealM])
+    end;
+handle_cast(UnknownReq, #state{socket=Socket, driver=Driver, peer=Peer}) ->
+    ?log(debug, "event=invalid_cast_req driver=~s socket=\"~s\" peer=\"~s\" req=\"~p\"",
+         [Driver, gen_rpc_helper:socket_to_string(Socket),
+          gen_rpc_helper:peer_to_string(Peer), UnknownReq]),
+    error(invalid_cast_req).

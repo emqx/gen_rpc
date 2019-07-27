@@ -27,6 +27,7 @@
         driver_mod :: atom(),
         driver_closed :: atom(),
         driver_error :: atom(),
+        max_batch_size :: integer(),
         keepalive :: tuple()}).
 
 %%% Supervisor functions
@@ -255,12 +256,15 @@ init({Node}) ->
                                       end,
                             case gen_rpc_keepalive:start(StatFun, Interval, {keepalive, check}) of
                                 {ok, KeepAlive} ->
+                                    MaxBatchSize = application:get_env(?APP, max_batch_size, 0),
                                     {ok, #state{socket=Socket,
                                                 driver=Driver,
                                                 driver_mod=DriverMod,
                                                 driver_closed=DriverClosed,
                                                 driver_error=DriverError,
-                                                keepalive=KeepAlive}, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
+                                                max_batch_size=MaxBatchSize,
+                                                keepalive=KeepAlive},
+                                    gen_rpc_helper:get_inactivity_timeout(?MODULE)};
                                 {error, Error} ->
                                     ?log(error, "event=start_keepalive_failed driver=~p, reason=\"~p\"", [Driver, Error]),
                                     {stop, Error}
@@ -302,9 +306,10 @@ handle_call(Msg, _Caller, #state{socket=Socket, driver=Driver} = State) ->
     {stop, {unknown_call, Msg}, {unknown_call, Msg}, State}.
 
 %% This is the actual CAST handler for CAST
-handle_cast({{cast,_M,_F,_A} = PacketTuple, SendTO}, State) ->
-    %%send_cast(PacketTuple, State, SendTO, false);
+handle_cast({{cast,_M,_F,_A} = PacketTuple, SendTO}, State = #state{max_batch_size = 0}) ->
     send_cast(PacketTuple, State, SendTO, true);
+handle_cast({{cast,_M,_F,_A} = PacketTuple, SendTO}, State = #state{max_batch_size = MaxBatchSize}) ->
+    send_cast(drain_cast(MaxBatchSize, [PacketTuple]), State, SendTO, true);
 
 %% This is the actual CAST handler for ABCAST
 handle_cast({{abcast,_Name,_Msg} = PacketTuple, undefined}, State) ->
@@ -418,8 +423,8 @@ send_cast(PacketTuple, #state{socket=Socket, driver=Driver, driver_mod=DriverMod
             {stop, Reason, State};
         ok ->
             ok = if Activate =:= true -> DriverMod:activate_socket(Socket);
-               true -> ok
-            end,
+                    true -> ok
+                 end,
             ?log(debug, "message=cast event=transmission_succeeded driver=~s socket=\"~s\"",
                  [Driver, gen_rpc_helper:socket_to_string(Socket)]),
             {noreply, State, gen_rpc_helper:get_inactivity_timeout(?MODULE)}
@@ -541,3 +546,12 @@ parse_sbcast_results([{_Pid,Node}|WorkerPids], Ref, {Good, Bad}, Timeout) ->
 
 parse_sbcast_results([], _Ref, Results, _Timeout) ->
     Results.
+
+drain_cast(N, CastReqs) when N =< 0 ->
+    lists:reverse(CastReqs);
+drain_cast(N, CastReqs) ->
+    receive {{cast,_M,_F,_A} = Req, _} ->
+        drain_cast(N-1, [Req | CastReqs])
+    after 0 ->
+        lists:reverse(CastReqs)
+    end.
