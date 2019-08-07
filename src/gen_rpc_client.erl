@@ -305,20 +305,6 @@ handle_call(Msg, _Caller, #state{socket=Socket, driver=Driver} = State) ->
          [Driver, gen_rpc_helper:socket_to_string(Socket), Msg]),
     {stop, {unknown_call, Msg}, {unknown_call, Msg}, State}.
 
-%% This is the actual CAST handler for CAST
-handle_cast({{cast,_M,_F,_A} = PacketTuple, SendTO}, State = #state{max_batch_size = 0}) ->
-    send_cast(PacketTuple, State, SendTO, true);
-handle_cast({{cast,_M,_F,_A} = PacketTuple, SendTO}, State = #state{max_batch_size = MaxBatchSize}) ->
-    send_cast(drain_cast(MaxBatchSize, [PacketTuple]), State, SendTO, true);
-
-%% This is the actual CAST handler for ABCAST
-handle_cast({{abcast,_Name,_Msg} = PacketTuple, undefined}, State) ->
-    send_cast(PacketTuple, State, undefined, false);
-
-%% This is the actual CAST handler for SBCAST
-handle_cast({{sbcast,_Name,_Msg,_Caller} = PacketTuple, undefined}, State) ->
-    send_cast(PacketTuple, State, undefined, true);
-
 %% This is the actual ASYNC CALL handler
 handle_cast({{async_call,_M,_F,_A} = PacketTuple, Caller, Ref}, #state{socket=Socket, driver=Driver, driver_mod=DriverMod} = State) ->
     Packet = erlang:term_to_binary({PacketTuple, {Caller,Ref}}),
@@ -344,6 +330,20 @@ handle_cast(Msg, #state{socket=Socket, driver=Driver} = State) ->
     ?log(error, "event=uknown_cast_received driver=~s socket=\"~s\" message=\"~p\" action=stopping",
          [Driver, gen_rpc_helper:socket_to_string(Socket), Msg]),
     {stop, {unknown_cast, Msg}, State}.
+
+%% This is the actual CAST handler for CAST
+handle_info({{cast,_M,_F,_A} = PacketTuple, SendTO}, State = #state{max_batch_size = 0}) ->
+    send_cast(PacketTuple, State, SendTO, true);
+handle_info({{cast,_M,_F,_A} = PacketTuple, SendTO}, State = #state{max_batch_size = MaxBatchSize}) ->
+    send_cast(drain_cast(MaxBatchSize, [PacketTuple]), State, SendTO, true);
+
+%% This is the actual CAST handler for ABCAST
+handle_info({{abcast,_Name,_Msg} = PacketTuple, undefined}, State) ->
+    send_cast(PacketTuple, State, undefined, false);
+
+%% This is the actual CAST handler for SBCAST
+handle_info({{sbcast,_Name,_Msg,_Caller} = PacketTuple, undefined}, State) ->
+    send_cast(PacketTuple, State, undefined, true);
 
 %% Handle any TCP packet coming in
 handle_info({Driver,Socket,Data}, #state{socket=Socket, driver=Driver, driver_mod=DriverMod} = State) ->
@@ -457,14 +457,14 @@ cast_worker(NodeOrTuple, Cast, Ret, SendTO) ->
                     %% We take care of CALL inside the gen_server
                     %% This is not resilient enough if the caller's mailbox is full
                     %% but it's good enough for now
-                    ok = gen_server:cast(NewPid, {Cast,SendTO}),
+                    erlang:send(NewPid, {Cast,SendTO}),
                     Ret;
                 {error, _Reason} ->
                     Ret
             end;
         Pid ->
             ?log(debug, "event=client_process_found pid=\"~p\" target=\"~p\"", [Pid, NodeOrTuple]),
-            ok = gen_server:cast(Pid, {Cast,SendTO}),
+            erlang:send(Pid, {Cast,SendTO}),
             Ret
     end.
 
