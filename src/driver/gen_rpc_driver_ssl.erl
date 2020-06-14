@@ -86,10 +86,9 @@ send(Socket, Data) when is_tuple(Socket), is_binary(Data) ->
             ok
     end.
 
--spec activate_socket(ssl:sslsocket()) -> ok.
+-spec activate_socket(ssl:sslsocket()) -> ok | {error, inet:posix()}.
 activate_socket(Socket) when is_tuple(Socket) ->
-    ok = ssl:setopts(Socket, [{active,once}]),
-    ok.
+    ssl:setopts(Socket, [{active, once}]).
 
 %% Authenticate to a server
 -spec authenticate_server(ssl:sslsocket()) -> ok | {error, {badtcp | badrpc, term()}}.

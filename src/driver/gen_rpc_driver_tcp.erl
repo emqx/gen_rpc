@@ -62,10 +62,9 @@ listen(Port) when is_integer(Port) ->
 accept(Socket) when is_port(Socket) ->
     gen_tcp:accept(Socket, infinity).
 
--spec activate_socket(port()) -> ok.
+-spec activate_socket(port()) -> ok | {error, inet:posix()}.
 activate_socket(Socket) when is_port(Socket) ->
-    ok = inet:setopts(Socket, [{active,true}]),
-    ok.
+    inet:setopts(Socket, [{active,true}]).
 
 -spec send(port(), binary()) -> ok | {error, term()}.
 send(Socket, Data) when is_port(Socket), is_binary(Data) ->

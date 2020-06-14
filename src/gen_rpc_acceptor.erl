@@ -83,14 +83,21 @@ callback_mode() ->
 
 waiting_for_socket({call,From}, {socket_ready,Socket}, #state{driver=Driver, driver_mod=DriverMod, peer=Peer} = State) ->
     ok = DriverMod:set_acceptor_opts(Socket),
-    ok = DriverMod:activate_socket(Socket),
+    ActivateResult = DriverMod:activate_socket(Socket),
     % Now we own the socket
     ?log(debug, "event=acquiring_socket_ownership driver=~s socket=\"~s\" peer=\"~p\" inet_opts: ~0p",
          [Driver, gen_rpc_helper:socket_to_string(Socket),
           gen_rpc_helper:peer_to_string(Peer),
           prim_inet:getopts(Socket, [gen_rpc_helper:user_tcp_opt_key(Opt)|| Opt <- ?USER_TCP_OPTS])]),
     ok = gen_statem:reply(From, ok),
-    {next_state, waiting_for_auth, State#state{socket=Socket}, gen_rpc_helper:get_authentication_timeout()}.
+    case ActivateResult of
+        ok ->
+            {next_state, waiting_for_auth, State#state{socket=Socket}, gen_rpc_helper:get_authentication_timeout()};
+        {error, _Posix} ->
+            ?log(notice, "message=channel_closed before receiving any data driver=~p socket=\"~s\" peer=\"~s\"",
+                 [Driver, gen_rpc_helper:socket_to_string(Socket), gen_rpc_helper:peer_to_string(Peer)]),
+            {stop, normal, State}
+    end.
 
 waiting_for_auth(info, {Driver,Socket,Data}, #state{socket=Socket, driver=Driver, driver_mod=DriverMod, peer=Peer} = State) ->
     case DriverMod:authenticate_client(Socket, Peer, Data) of
