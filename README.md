@@ -109,15 +109,33 @@ and pass them as the node list in the multi-node function.
 
 ## Application settings
 
-- `tcp_server_port`: The plain TCP port `gen_rpc` will use for incoming connections or `false` if you
-  do not want plain TCP enabled.
+- `port_discovery`:
 
-- `tcp_client_port`: The plain TCP port `gen_rpc` will use for outgoing connections.
+    The strategy for getting the listening port of local node. Defaults to `manual`.
+
+    - Set it to `manual` (default) the gen_rpc will resolve the listening ports by `tcp_server_port`, `ssl_server_port`, `tcp_client_port` and `ssl_client_port`.
+
+    - Set it to `stateless` the gen_rpc will resolve the listening prot by node name with a stateless approach:
+    If node name is `emqx<N>@127.0.0.1` where the `<N>` is an integer, then the listening port will be `5370 + <N>`.
+    e.g.
+      1. node_name = `emqx@127.0.0.1`:
+        port = 5370
+      2. node_name = `emqx3@127.0.0.1`:
+        port = 5373
+      3. node_name = `emqx60165@127.0.0.1`:
+        port = 65535
+      4. node_name = `emqx60166@127.0.0.1`:
+        invalid and gen_rpc cannot get started
+
+- `tcp_server_port`: The plain TCP port `gen_rpc` will use for incoming connections or `false` if you
+  do not want plain TCP enabled. Only takes effect when `port_discovery` = `manual`.
+
+- `tcp_client_port`: The plain TCP port `gen_rpc` will use for outgoing connections. Only takes effect when `port_discovery` = `manual`.
 
 - `ssl_server_port`: The port `gen_rpc` will use for incoming SSL connections or `false` if you do not
-  want SSL enabled.
+  want SSL enabled. Only takes effect when `port_discovery` = `manual`.
 
-- `ssl_client_port`: The port `gen_rpc` will use for outgoing SSL connections.
+- `ssl_client_port`: The port `gen_rpc` will use for outgoing SSL connections. Only takes effect when `port_discovery` = `manual`.
 
 - `ssl_server_options` and `ssl_client_options`: Settings for the `ssl` interface that `gen_rpc` will use to
   connect to a remote `gen_rpc` server.

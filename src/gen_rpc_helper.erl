@@ -16,6 +16,8 @@
 %%% Include helpful guard macros
 -include("types.hrl").
 
+-define(DEFAULT_LISTEN_PORT, 5370).
+
 %%% Public API
 -export([peer_to_string/1,
         socket_to_string/1,
@@ -130,8 +132,14 @@ get_server_driver_options(Driver) when is_atom(Driver) ->
     DriverMod = erlang:list_to_atom("gen_rpc_driver_" ++ DriverStr),
     ClosedMsg = erlang:list_to_atom(DriverStr ++ "_closed"),
     ErrorMsg = erlang:list_to_atom(DriverStr ++ "_error"),
-    PortSetting = erlang:list_to_atom(DriverStr ++ "_server_port"),
-    {ok, DriverPort} = application:get_env(?APP, PortSetting),
+    DriverPort = case application:get_env(?APP, port_discovery, manual) of
+        manual ->
+            PortSetting = erlang:list_to_atom(DriverStr ++ "_server_port"),
+            {ok, Port} = application:get_env(?APP, PortSetting),
+            Port;
+        stateless ->
+            port(node())
+    end,
     {DriverMod, DriverPort, ClosedMsg, ErrorMsg}.
 
 -spec get_client_driver_options(atom()) -> tuple().
@@ -235,9 +243,14 @@ get_client_config_from_map(Node, NodeConfig) ->
         error ->
             {ok, Driver} = application:get_env(?APP, default_client_driver),
             DriverStr = erlang:atom_to_list(Driver),
-            PortSetting = erlang:list_to_atom(DriverStr ++ "_client_port"),
-            {ok, Port} = application:get_env(?APP, PortSetting),
-            {Driver, Port};
+            case application:get_env(?APP, port_discovery, manual) of
+                manual ->
+                    PortSetting = erlang:list_to_atom(DriverStr ++ "_client_port"),
+                    {ok, Port} = application:get_env(?APP, PortSetting),
+                    {Driver, Port};
+                stateless ->
+                    {Driver, port(Node)}
+            end;
         {ok, {Driver,Port}} ->
             {Driver, Port};
         {ok, Port} ->
@@ -265,3 +278,26 @@ get_user_tcp_opts(Keys) ->
 user_tcp_opt_key(socket_buffer) -> buffer;
 user_tcp_opt_key(socket_recbuf) -> recbuf;
 user_tcp_opt_key(socket_sndbuf) -> sndbuf.
+
+%% @doc Figure out dist port from node's name.
+-spec(port(node() | string()) -> inet:port_number()).
+port(Name) when is_atom(Name) ->
+    port(atom_to_list(Name));
+port(Name) when is_list(Name) ->
+    %% Figure out the base port.
+    BasePort = ?DEFAULT_LISTEN_PORT,
+    %% Now, figure out our "offset" on top of the base port.  The
+    %% offset is the integer just to the left of the @ sign in our node
+    %% name.  If there is no such number, the offset is 0.
+    %%
+    %% Also handle the case when no hostname was specified.
+    BasePort + offset(Name).
+
+%% @doc Figure out the offset by node's name
+offset(NodeName) ->
+    ShortName = re:replace(NodeName, "@.*$", ""),
+    case re:run(ShortName, "[0-9]+$", [{capture, first, list}]) of
+        nomatch -> 0;
+        {match, [OffsetAsString]} ->
+            list_to_integer(OffsetAsString)
+    end.
