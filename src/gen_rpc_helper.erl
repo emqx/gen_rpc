@@ -17,6 +17,7 @@
 -include("types.hrl").
 
 -define(DEFAULT_LISTEN_PORT, 5370).
+-define(MAX_PORT_LIMIT, 60000).
 
 %%% Public API
 -export([peer_to_string/1,
@@ -297,7 +298,8 @@ port(Name) when is_list(Name) ->
 offset(NodeName) ->
     ShortName = re:replace(NodeName, "@.*$", ""),
     case re:run(ShortName, "[0-9]+$", [{capture, first, list}]) of
-        nomatch -> 0;
+        nomatch ->
+            0;
         {match, [OffsetAsString]} ->
-            list_to_integer(OffsetAsString)
+            list_to_integer(OffsetAsString) rem ?MAX_PORT_LIMIT
     end.
