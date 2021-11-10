@@ -273,13 +273,15 @@ multiple_casts_test(_Config) ->
        fun(_Ret, Trace) ->
                %% 1. Check that all casts were received by a local client process before sending over net:
                ?assert(
-                  ?strict_causality( #{?snk_kind := test_cast, seqno := _SeqNo}
-                                   , #{?snk_kind := gen_rpc_cast, cast := {cast, gen_rpc_test_helper, test_call, [_SeqNo]}}
+                  ?strict_causality( #{?snk_kind := test_cast, seqno := _SeqNoA}
+                                   , #{?snk_kind := gen_rpc_cast, cast := {cast, gen_rpc_test_helper, test_call, [_SeqNoB]}}
+                                   , _SeqNoA == _SeqNoB
                                    , Trace
                                    )),
                ?assert(
-                  ?strict_causality( #{?snk_kind := gen_rpc_cast,      cast   := _Cast, sendto := _SendTo}
-                                   , #{?snk_kind := gen_rpc_send_cast, packet := _Cast, sendto := _SendTo}
+                  ?strict_causality( #{?snk_kind := gen_rpc_cast,      cast   := _CastA, sendto := _SendToA}
+                                   , #{?snk_kind := gen_rpc_send_cast, packet := _CastB, sendto := _SendToB}
+                                   , _CastA == _CastB andalso _SendToA == _SendToB
                                    , Trace
                                    )),
                %% 2. Check that no message reordering occurs on the client side:
@@ -288,8 +290,9 @@ multiple_casts_test(_Config) ->
                ?assertMatch([], ?of_kind(gen_rpc_error, Trace)),
                %% 4. Check delivery of the messages:
                ?assert(
-                  ?strict_causality( #{?snk_kind := gen_rpc_send_cast, packet := _Packet}
-                                   , #{?snk_kind := gen_rpc_acceptor_receive, packet := _Packet}
+                  ?strict_causality( #{?snk_kind := gen_rpc_send_cast, packet := _PacketA}
+                                   , #{?snk_kind := gen_rpc_acceptor_receive, packet := _PacketB}
+                                   , _PacketA == _PacketB
                                    , Trace
                                    )),
                %% 5. Check that all the messages were delivered:
