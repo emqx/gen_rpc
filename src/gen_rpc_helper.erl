@@ -260,7 +260,8 @@ get_user_tcp_opts(Keys) ->
 
 user_tcp_opt_key(socket_buffer) -> buffer;
 user_tcp_opt_key(socket_recbuf) -> recbuf;
-user_tcp_opt_key(socket_sndbuf) -> sndbuf.
+user_tcp_opt_key(socket_sndbuf) -> sndbuf;
+user_tcp_opt_key(socket_ip) -> ip.
 
 %% @doc Figure out dist port from node's name.
 -spec(port(node() | string()) -> inet:port_number()).

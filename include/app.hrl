@@ -6,4 +6,8 @@
 
 -define(APP, gen_rpc).
 
--define(USER_TCP_OPTS, [socket_buffer, socket_recbuf, socket_sndbuf]).
+-define(USER_TCP_OPTS, [ socket_buffer
+                       , socket_recbuf
+                       , socket_sndbuf
+                       , socket_ip
+                       ]).
