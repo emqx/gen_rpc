@@ -56,7 +56,7 @@ connect(Node, Port) when is_atom(Node) ->
 
 -spec listen(inet:port_number()) -> {ok, port()} | {error, term()}.
 listen(Port) when is_integer(Port) ->
-    gen_tcp:listen(Port, ?TCP_DEFAULT_OPTS ++ gen_rpc_helper:get_user_tcp_opts()).
+    gen_tcp:listen(Port, ?TCP_DEFAULT_OPTS ++ gen_rpc_helper:get_user_tcp_opts() ++ gen_rpc_helper:get_listen_ip_config()).
 
 -spec accept(port()) -> {ok, inet:socket()} | {error, term()}.
 accept(Socket) when is_port(Socket) ->
