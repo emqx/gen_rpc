@@ -39,7 +39,8 @@
          get_sbcast_receive_timeout/0,
          get_control_receive_timeout/0,
          get_inactivity_timeout/1,
-         get_async_call_inactivity_timeout/0]).
+         get_async_call_inactivity_timeout/0,
+         get_listen_ip_config/0]).
 
 %%% ===================================================
 %%% Public API
@@ -261,6 +262,12 @@ get_user_tcp_opts(Keys) ->
 user_tcp_opt_key(socket_buffer) -> buffer;
 user_tcp_opt_key(socket_recbuf) -> recbuf;
 user_tcp_opt_key(socket_sndbuf) -> sndbuf.
+
+get_listen_ip_config() ->
+    case application:get_env(?APP, socket_ip) of
+        undefined -> [];
+        {ok, IP} -> [{ip, IP}]
+    end.
 
 %% @doc Figure out dist port from node's name.
 -spec(port(node() | string()) -> inet:port_number()).

@@ -79,7 +79,9 @@
         %% Seconds between probes
         {socket_keepalive_interval, 5},
         %% Probes lost to close the connection
-        {socket_keepalive_count, 2}
+        {socket_keepalive_count, 2},
+        %% Local network interface to use.
+        {socket_ip, {0,0,0,0}}
     ]},
     {modules, []}]
 }.

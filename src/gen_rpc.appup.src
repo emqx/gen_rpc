@@ -1,0 +1,22 @@
+%% -*- mode: erlang -*-
+%% Unless you know what you are doing, DO NOT edit manually!!
+{VSN,
+  [{<<"2.8.1">>,
+    [
+        {load_module,gen_rpc_helper,brutal_purge,soft_purge,[]},
+        {load_module,gen_rpc_driver_ssl,brutal_purge,soft_purge,[]},
+        {load_module,gen_rpc_driver_tcp,brutal_purge,soft_purge,[]}
+    ]},
+   {<<".*">>,
+    []}
+  ],
+  [{<<"2.8.1">>,
+    [
+        {load_module,gen_rpc_helper,brutal_purge,soft_purge,[]},
+        {load_module,gen_rpc_driver_ssl,brutal_purge,soft_purge,[]},
+        {load_module,gen_rpc_driver_tcp,brutal_purge,soft_purge,[]}
+    ]},
+   {<<".*">>,
+    []}
+  ]
+}.

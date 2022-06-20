@@ -61,7 +61,7 @@ connect(Node, Port) when is_atom(Node) ->
 -spec listen(inet:port_number()) -> {ok, ssl:sslsocket()} | {error, term()}.
 listen(Port) when is_integer(Port) ->
     SslOpts = merge_ssl_options(server),
-    ssl:listen(Port, SslOpts ++ gen_rpc_helper:get_user_tcp_opts()).
+    ssl:listen(Port, SslOpts ++ gen_rpc_helper:get_user_tcp_opts() ++ gen_rpc_helper:get_listen_ip_config()).
 
 -spec accept(ssl:sslsocket()) -> {ok, ssl:sslsocket()} | {error, term()}.
 accept(Socket) when is_tuple(Socket) ->
