@@ -47,15 +47,13 @@
 %%% Public API
 %%% ===================================================
 %% Return the connected peer's IP
--spec peer_to_string({inet:ip4_address(), inet:port_number()} | inet:ip4_address()) -> string().
-peer_to_string({{A,B,C,D}, Port}) when is_integer(A), is_integer(B), is_integer(C), is_integer(D), is_integer(Port) ->
-    integer_to_list(A) ++ "." ++
-    integer_to_list(B) ++ "." ++
-    integer_to_list(C) ++ "." ++
-    integer_to_list(D) ++ ":" ++
-    integer_to_list(Port);
-peer_to_string({A,B,C,D} = IpAddress) when is_integer(A), is_integer(B), is_integer(C), is_integer(D) ->
-    peer_to_string({IpAddress, 0}).
+-spec peer_to_string({inet:ip_address(), inet:port_number()} | inet:ip_address()) -> string().
+peer_to_string({Ip, Port}) when tuple_size(Ip) =:= 4 ->
+    inet:ntoa(Ip) ++ ":" ++ integer_to_list(Port);
+peer_to_string({Ip, Port}) when tuple_size(Ip) =:= 8 ->
+    "[" ++ inet:ntoa(Ip) ++ "]:" ++ integer_to_list(Port);
+peer_to_string(Ip) when is_tuple(Ip) andalso (tuple_size(Ip) =:= 4 orelse tuple_size(Ip) =:= 8) ->
+    peer_to_string({Ip, 0}).
 
 -spec socket_to_string(term()) -> string().
 socket_to_string(Socket) when is_port(Socket) ->
