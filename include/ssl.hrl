@@ -11,14 +11,15 @@
         ([ {secure_renegotiate,true}
          , {reuse_sessions,true}
          , {verify, verify_peer}
-         , {fail_if_no_peer_cert, true}
          %%, {keep_secrets, true} % debug only
          ] ++ ?TCP_DEFAULT_OPTS)).
 
--define(SSL_DEFAULT_SERVER_OPTS, [{fail_if_no_peer_cert,true},
+-define(SSL_DEFAULT_SERVER_OPTS,
+        [{fail_if_no_peer_cert,true},
         {log_alert,false},
         {honor_cipher_order,true},
         {client_renegotiation,true}]).
 
--define(SSL_DEFAULT_CLIENT_OPTS, [{server_name_indication,disable},
-        {depth,99}]).
+-define(SSL_DEFAULT_CLIENT_OPTS,
+        [{server_name_indication,disable},
+         {depth,10}]).
