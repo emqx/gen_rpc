@@ -27,7 +27,7 @@
          set_optimal_process_flags/0,
          is_driver_enabled/1,
          merge_sockopt_lists/2,
-         get_user_tcp_opts/0,
+         get_user_tcp_opts/1,
          user_tcp_opt_key/1,
          get_server_driver_options/1,
          get_client_config_per_node/1,
@@ -247,19 +247,32 @@ hybrid_proplist_compare({K1,_V1}, {K2,_V2}) ->
 hybrid_proplist_compare(K1, K2) ->
     K1 =< K2.
 
-get_user_tcp_opts() ->
-    get_user_tcp_opts(?USER_TCP_OPTS).
-get_user_tcp_opts(Keys) ->
+-spec get_user_tcp_opts(listen | connect | accept) -> list().
+get_user_tcp_opts(Type) ->
+    get_user_tcp_opts(?USER_TCP_OPTS, Type).
+
+get_user_tcp_opts(Keys, Type) ->
     lists:foldl(
         fun(Key, OptAcc) ->
             case application:get_env(?APP, Key) of
                 undefined -> OptAcc;
                 {ok, Val} -> [{user_tcp_opt_key(Key), Val} | OptAcc]
             end
-        end, [], Keys).
+        end, [], Keys) ++
+    case Type =/= accept andalso get_socket_ip() of
+        {ok, Ip} when tuple_size(Ip) =:= 8 ->
+            %% self node is listening on a ipv6 address
+            %% assume all peers are listening on ipv6 addresses
+            [inet6];
+        _ ->
+            []
+    end.
+
+get_socket_ip() ->
+    application:get_env(?APP, socket_ip).
 
 get_listen_ip_config() ->
-    case application:get_env(?APP, socket_ip) of
+    case get_socket_ip() of
         undefined -> [];
         {ok, IP} -> [{ip, IP}]
     end.

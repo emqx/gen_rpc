@@ -45,7 +45,7 @@
 connect(Node, Port) when is_atom(Node) ->
     Host = gen_rpc_helper:host_from_node(Node),
     ConnTO = gen_rpc_helper:get_connect_timeout(),
-    case gen_tcp:connect(Host, Port, ?TCP_DEFAULT_OPTS ++ gen_rpc_helper:get_user_tcp_opts(), ConnTO) of
+    case gen_tcp:connect(Host, Port, ?TCP_DEFAULT_OPTS ++ gen_rpc_helper:get_user_tcp_opts(connect), ConnTO) of
         {ok, Socket} ->
             ?log(debug, "event=connect_to_remote_server peer=\"~s\" socket=\"~s\" result=success",
                  [Node, gen_rpc_helper:socket_to_string(Socket)]),
@@ -57,7 +57,7 @@ connect(Node, Port) when is_atom(Node) ->
 
 -spec listen(inet:port_number()) -> {ok, port()} | {error, term()}.
 listen(Port) when is_integer(Port) ->
-    gen_tcp:listen(Port, ?TCP_DEFAULT_OPTS ++ gen_rpc_helper:get_user_tcp_opts()
+    gen_tcp:listen(Port, ?TCP_DEFAULT_OPTS ++ gen_rpc_helper:get_user_tcp_opts(listen)
         ++ gen_rpc_helper:get_listen_ip_config()).
 
 -spec accept(port()) -> {ok, inet:socket()} | {error, term()}.
@@ -122,7 +122,7 @@ set_send_timeout(Socket, SendTimeout) when is_port(Socket) ->
 -spec set_acceptor_opts(port()) -> ok.
 set_acceptor_opts(Socket) when is_port(Socket) ->
     ok = set_socket_keepalive(os:type(), Socket),
-    ok = inet:setopts(Socket, [{send_timeout, gen_rpc_helper:get_send_timeout(undefined)}|?ACCEPTOR_DEFAULT_TCP_OPTS ++ gen_rpc_helper:get_user_tcp_opts()]),
+    ok = inet:setopts(Socket, [{send_timeout, gen_rpc_helper:get_send_timeout(undefined)}|?ACCEPTOR_DEFAULT_TCP_OPTS ++ gen_rpc_helper:get_user_tcp_opts(accept)]),
     ok.
 
 -spec getstat(port(), list()) -> ok | {error, term()}.

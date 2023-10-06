@@ -48,7 +48,7 @@ connect(Node, Port) when is_atom(Node) ->
     Host = gen_rpc_helper:host_from_node(Node),
     ConnTO = gen_rpc_helper:get_connect_timeout(),
     SslOpts = merge_ssl_options(client),
-    case ssl:connect(Host, Port, SslOpts ++ gen_rpc_helper:get_user_tcp_opts(), ConnTO) of
+    case ssl:connect(Host, Port, SslOpts ++ gen_rpc_helper:get_user_tcp_opts(connect), ConnTO) of
         {ok, Socket} ->
             ?log(debug, "event=connect_to_remote_server peer=\"~s\" socket=\"~s\" result=success",
                  [Node, gen_rpc_helper:socket_to_string(Socket)]),
@@ -62,7 +62,7 @@ connect(Node, Port) when is_atom(Node) ->
 -spec listen(inet:port_number()) -> {ok, ssl:sslsocket()} | {error, term()}.
 listen(Port) when is_integer(Port) ->
     SslOpts = merge_ssl_options(server),
-    ssl:listen(Port, SslOpts ++ gen_rpc_helper:get_user_tcp_opts()
+    ssl:listen(Port, SslOpts ++ gen_rpc_helper:get_user_tcp_opts(listen)
         ++ gen_rpc_helper:get_listen_ip_config()).
 
 -spec accept(ssl:sslsocket()) -> {ok, ssl:sslsocket()} | {error, term()}.
@@ -129,7 +129,7 @@ set_send_timeout(Socket, SendTimeout) when is_tuple(Socket) ->
 set_acceptor_opts(Socket) when is_tuple(Socket) ->
     ok = set_socket_keepalive(os:type(), Socket),
     ok = ssl:setopts(Socket, [{send_timeout, gen_rpc_helper:get_send_timeout(undefined)} |
-                              gen_rpc_helper:get_user_tcp_opts()]),
+                              gen_rpc_helper:get_user_tcp_opts(accept)]),
     ok.
 
 -spec getstat(ssl:sslsocket(), list()) -> ok | {error, any()}.
