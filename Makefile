@@ -1,24 +1,6 @@
 #
-# Copyright (c) 2022 EMQ Technologies Co., Ltd. All Rights Reserved.
+# Copyright (c) 2022-2023 EMQ Technologies Co., Ltd. All Rights Reserved.
 # Copyright 2015 Panagiotis Papadomitsos. All Rights Reserved.
-#
-# Build targets:
-#
-# all: 			    rebar3 as dev do compile
-# shell:		    rebar3 as dev do shell
-# clean: 		    rebar3 as dev do clean
-# distclean:        rebar3 as dev do clean -a
-#                   and explicitly delete other build artifacts
-# test: 		    rebar3 as test do ct -v, cover
-# travis:           Run the proper tests/coveralls in travis
-# dialyzer:         rebar3 as test do dialyzer
-# xref:             rebar3 as dev do xref
-# dist:             rebar3 as test do compile, ct -v -c, xref, dialyzer, cover
-# spec:             Runs typer to generate source code specs
-# rebar:            Downloads a precompiled rebar3 binary and places it inside the project. The rebar binary is .gitignored.
-#                   This step is always run first on build targets.
-# tags:             Builds Emacs tags file
-# epmd:             Runs the Erlang port mapper daemon, required for running the app and tests
 #
 
 # .DEFAULT_GOAL can be overridden in custom.mk if "all" is not the desired
@@ -33,20 +15,11 @@
 .PHONY: shell shell-master shell-slave
 
 # Misc targets
-.PHONY: clean testclean distclean tags rebar
+.PHONY: clean testclean distclean tags rebar docker docker-test docker-test-ssl docker-test-ipv6 docker-test-ipv6-ssl
 
 PROJ = $(shell ls -1 src/*.src | sed -e 's/src//' | sed -e 's/\.app\.src//' | tr -d '/')
 
-# =============================================================================
-# verify that the programs we need to run are installed on this system
-# =============================================================================
-ERL = $(shell which erl)
 TYPER = $(shell which typer)
-
-ifeq ($(ERL),)
-$(error "Erlang not available on this system")
-endif
-
 
 REBAR = rebar3
 
@@ -54,59 +27,51 @@ OTP_RELEASE = $(shell escript otp-release.escript)
 
 PLT_FILE = $(CURDIR)/_plt/rebar3_$(OTP_RELEASE)_plt
 
-# ======================
-# Integration test logic
-# ======================
-ifneq ($(shell which docker 2> /dev/null),)
+# ============================
+# Integration test with docker
+# ============================
+
+DOCKER_IMAGE ?= genrpc
+docker:
+	@docker build --network host --pull -t $(DOCKER_IMAGE) .
 
 NODES ?= 3
-IMAGE = $(shell docker images -q gen_rpc:integration 2> /dev/null)
+docker-test: docker
+	@./test/integration/integration-tests.sh $(NODES)
 
-image:
-ifeq ($(IMAGE),)
-	@cd test/integration && docker build --rm --pull -t gen_rpc:integration .
-endif
+docker-test-ssl: docker
+	@env SSL=true ./test/integration/integration-tests.sh $(NODES)
 
-integration: image
-	@export NODES=$(NODES) && cd test/integration && bash -c "./integration-tests.sh $(NODES)"
-endif
+docker-test-ipv6: docker
+	@env IPV6=true ./test/integration/integration-tests.sh $(NODES)
+
+docker-test-ipv6-ssl: docker
+	@env IPV6=true SSL=true ./test/integration/integration-tests.sh $(NODES)
+
+docker-cluster: docker
+	@./test/integration/integration-tests.sh $(NODES) false
 
 # =============================================================================
 # Build targets
 # =============================================================================
 
 all:
-	@REBAR_PROFILE=dev $(REBAR) do compile
+	$(REBAR) compile
 
 test: epmd
 	@REBAR_PROFILE=test $(REBAR) do eunit, ct  --name gen_rpc_master@127.0.0.1 --cover, cover
 
 dialyzer: $(PLT_FILE)
-	@REBAR_PROFILE=dev $(REBAR) do compile, dialyzer
+	@$(REBAR) do compile, dialyzer
 
 xref:
-	@REBAR_PROFILE=dev $(REBAR) do xref
+	@$(REBAR) xref
 
 spec: dialyzer
 	@$(TYPER) --annotate-inc-files -I ./include --plt $(PLT_FILE) -r src/
 
 dist: test
-	@REBAR_PROFILE=dev $(REBAR) do dialyzer, xref
-
-travis: testclean dist
-	@REBAR_PROFILE=test $(REBAR) do coveralls send || true
-
-# =============================================================================
-# Run targets
-# =============================================================================
-
-shell: shell-master
-
-shell-master: epmd
-	@REBAR_PROFILE=dev $(REBAR) do shell --name gen_rpc_master@127.0.0.1 --config test/gen_rpc.master.config
-
-shell-slave: epmd
-	@REBAR_PROFILE=dev $(REBAR) do shell --name gen_rpc_slave@127.0.0.1 --config test/gen_rpc.slave.config
+	@$(REBAR) do dialyzer, xref
 
 # =============================================================================
 # Misc targets
@@ -132,4 +97,4 @@ tags:
 	find src _build/default/lib -name "*.[he]rl" -print | etags -
 
 $(PLT_FILE):
-	@REBAR_PROFILE=dev $(REBAR) do dialyzer || true
+	@$(REBAR) do dialyzer || true

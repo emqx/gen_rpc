@@ -50,11 +50,11 @@ connect(Node, Port) when is_atom(Node) ->
     SslOpts = merge_ssl_options(client),
     case ssl:connect(Host, Port, SslOpts ++ gen_rpc_helper:get_user_tcp_opts(connect), ConnTO) of
         {ok, Socket} ->
-            ?log(debug, "event=connect_to_remote_server peer=\"~s\" socket=\"~s\" result=success",
-                 [Node, gen_rpc_helper:socket_to_string(Socket)]),
+            ?log(debug, "event=connect_to_remote_server, peer=~s, port=~p, socket=~s",
+                 [Node, Port, gen_rpc_helper:socket_to_string(Socket)]),
             {ok, Socket};
         {error, Reason} ->
-            ?log(error, "event=connect_to_remote_server peer=\"~s\" result=failure reason=\"~p\"", [Node, Reason]),
+            ?log(error, "event=connect_to_remote_server peer=~s, port=~p, reason=~0p", [Node, Port, Reason]),
             {error, {badtcp,Reason}}
     end.
 

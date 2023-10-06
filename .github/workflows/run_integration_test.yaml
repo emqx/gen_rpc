@@ -1,0 +1,25 @@
+name: Run integration tests
+
+on: [push, pull_request]
+
+jobs:
+    run_tests:
+        runs-on: ubuntu-latest
+
+        steps:
+        - uses: actions/checkout@v1
+        - name: Docker Test TCP
+          run: |
+            make docker-test
+
+        - name: Docker Test SSL
+          run: |
+            make docker-test-ssl
+
+        - name: Docker Test Ipv6 TCP
+          run: |
+            make docker-test-ipv6
+
+        - name: Docker Test Ipv6 SSL
+          run: |
+            make docker-test-ipv6-ssl

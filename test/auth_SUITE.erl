@@ -52,7 +52,6 @@ groups() ->
     [{tcp, [], Regular ++ CompatGroups}, {ssl, [], Regular ++ CompatGroups}].
 
 init_per_suite(Config) ->
-    %% Build old versions of gen_rpc to test backward/forward compatibility:
     Config.
 
 end_per_suite(Config) ->
@@ -66,6 +65,7 @@ init_per_group(Group, Config) when Group =:= tcp; Group =:= ssl ->
     %% Save the driver in the state
     gen_rpc_test_helper:store_driver_in_config(Driver, Config);
 init_per_group(CompatGroupTag, Config) ->
+    %% Build old versions of gen_rpc to test backward/forward compatibility:
     Dir = build_old_rel(CompatGroupTag, Config),
     [{old_rel_dir, Dir}, {old_tag, CompatGroupTag} | Config].
 
@@ -153,10 +153,7 @@ t_auth_client_fail(Config) ->
            ok = gen_rpc_test_helper:start_slave(Driver),
            Node = node(),
            ?assertNotMatch(canary_is_dead,
-                           erpc:call(?SLAVE,
-                                     fun() ->
-                                             gen_rpc:call(Node, ?MODULE, canary, [])
-                                     end))
+                           erpc:call(?SLAVE, gen_rpc, call, [Node, ?MODULE, canary, []]))
        end,
        [ fun ?MODULE:prop_canary/1
        ]).
@@ -186,10 +183,7 @@ t_challenge_response_invalid_cookie_server(Config) ->
        begin
            ok = gen_rpc_test_helper:start_master(Driver),
            ok = gen_rpc_test_helper:start_slave(Driver),
-           erpc:call(?SLAVE,
-                     fun() ->
-                             application:set_env(?APP, secret_cookie, <<"wrong">>)
-                     end),
+           erpc:call(?SLAVE, application, set_env, [?APP, secret_cookie, <<"wrong">>]),
            ?assertMatch({badrpc, invalid_cookie},
                         gen_rpc:call(?SLAVE, ?MODULE, canary, []))
        end,
@@ -239,9 +233,7 @@ t_compat_old_client_ok(Config) ->
        begin
            ok = gen_rpc_test_helper:start_master(Driver),
            ok = gen_rpc_test_helper:start_slave(Driver, old_path(Config)),
-           Result = erpc:call(?SLAVE, fun() ->
-                                              gen_rpc:call(?MASTER, erlang, node, [])
-                                      end),
+           Result = erpc:call(?SLAVE, gen_rpc, call, [?MASTER, erlang, node, []]),
            ?assertMatch(?MASTER, Result),
            Config
        end,
@@ -276,9 +268,7 @@ t_compat_old_client_invalid_cookie(Config) ->
            application:set_env(?APP, secret_cookie, <<"wrong_cookie">>),
            ok = gen_rpc_test_helper:start_master(Driver),
            ok = gen_rpc_test_helper:start_slave(Driver, old_path(Config)),
-           Result = erpc:call(?SLAVE, fun() ->
-                                              gen_rpc:call(?MASTER, ?MODULE, canary, [])
-                                      end),
+           Result = erpc:call(?SLAVE, gen_rpc, call, [?MASTER, ?MODULE, canary, []]),
            ?assertMatch({badrpc, invalid_cookie}, Result),
            Config
        end,
@@ -317,6 +307,9 @@ old_path(Config) ->
                          code:get_path()),
     [OldRelDir|Paths].
 
+%% build old version app
+%% ensure REBAR_PROFILE is 'default' because the 'test' profile
+%% uses a deprecated module
 build_old_rel(Tag, Config) ->
     DataDir = filename:join(proplists:get_value(data_dir, Config), Tag),
     Ret = os:cmd("mkdir -p '" ++ DataDir ++ "' &&
@@ -324,16 +317,16 @@ build_old_rel(Tag, Config) ->
                   git clone https://github.com/emqx/gen_rpc.git || true &&
                   cd gen_rpc &&
                   git checkout '" ++ atom_to_list(Tag) ++ "' &&
-                  rebar3 compile &&
+                  env REBAR_PROFILE=default rebar3 compile &&
                   echo 'DONE'"),
     case lists:suffix("DONE\n", Ret) of
         true ->
             ok;
         false ->
-            erlang:display(Ret),
+            ct:pal("~ts", [Ret]),
             error(compilation_failed)
     end,
-    filename:join(DataDir, "gen_rpc/_build/test/lib/gen_rpc/ebin").
+    filename:join(DataDir, "gen_rpc/_build/default/lib/gen_rpc/ebin").
 
 has_fallback(Config) ->
     %% Insecure fallback can only be triggered by very ancient

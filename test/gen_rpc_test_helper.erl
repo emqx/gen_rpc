@@ -29,7 +29,8 @@
          spawn_short_running/0,
          stub_function/0,
          ping/1,
-         test_call/1
+         test_call/1,
+         init_integration_test_config/0
         ]).
 
 -compile(nowarn_deprecated_function).
@@ -37,6 +38,40 @@
 %%% ===================================================
 %%% Public API
 %%% ===================================================
+
+init_integration_test_config() ->
+    _ = application:load(gen_rpc),
+    ProjRoot = os:getenv("PROJ_ROOT"),
+    case os:getenv("TEST_WITH_IPV6") of
+        "true" ->
+            io:format(user, "===< Setting socket_ip to ipv6~n", []),
+            {ok, Ip} = inet:parse_address("::"),
+            ok = set_env(socket_ip, Ip);
+        _ ->
+            io:format(user, "===< Not testing with Ipv6~n", [])
+    end,
+    case os:getenv("TEST_WITH_SSL") of
+        "true" ->
+            io:format(user, "===< Setting default driver to ssl~n", []),
+            ok = set_env(default_client_driver, ssl),
+            %% disable tcp
+            ok = set_env(tcp_server_port, false),
+            %% enable ssl
+            ok = set_env(ssl_server_port, 5370),
+            ok = set_env(ssl_server_options, certs(ProjRoot)),
+            ok = set_env(ssl_client_options, certs(ProjRoot));
+        _ ->
+            io:format(user, "===< Not testing with SSL~n", [])
+    end.
+
+set_env(Key, Value) ->
+     application:set_env(gen_rpc, Key, Value, [{persistent, true}]).
+
+certs(Dir) ->
+    [ {certfile, filename:join(Dir, "priv/ssl/gen_rpc_master@127.0.0.1.cert.pem")},
+      {keyfile, filename:join(Dir, "priv/ssl/gen_rpc_master@127.0.0.1.key.pem")},
+      {cacertfile, filename:join(Dir, "priv/ssl/ca.cert.pem")}
+    ].
 
 %% Start target test erlang node
 start_distribution(Node)->
@@ -67,7 +102,7 @@ start_slave(Driver, Paths) ->
     SlaveStr = atom_to_list(?SLAVE),
     [NameStr, IpStr] = string:tokens(SlaveStr, [$@]),
     Name = list_to_atom(NameStr),
-    {ok, _Slave} = slave:start(IpStr, Name),
+    ok = do_start_peer(IpStr, Name),
     ok = rpc:call(?SLAVE, code, add_pathsz, [Paths]),
     ok = set_application_environment(?SLAVE),
     ok = set_driver_configuration(Driver, ?SLAVE),
@@ -76,9 +111,18 @@ start_slave(Driver, Paths) ->
     snabbkaffe:forward_trace(?SLAVE),
     ok.
 
-stop_slave() ->
-    ok = slave:stop(?SLAVE),
+do_start_peer(IpStr, Name) ->
+    {ok,  Pid, Node} = peer:start(#{host => IpStr, longnames => true, name => Name}),
+    _ = register(Node, Pid),
     ok.
+
+stop_slave() ->
+    try
+        ok = peer:stop(?SLAVE)
+    catch
+        exit : noproc ->
+            ok
+    end.
 
 set_application_environment(?MASTER) ->
     ok = lists:foreach(fun({Application, Key, Value}) ->

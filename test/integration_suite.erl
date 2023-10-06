@@ -1,8 +1,8 @@
 %%% -*-mode:erlang;coding:utf-8;tab-width:4;c-basic-offset:4;indent-tabs-mode:()-*-
 %%% ex: set ft=erlang fenc=utf-8 sts=4 ts=4 sw=4 et:
 %%%
-%%% Copyright (c) 2022 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%% Copyright 2015 Panagiotis Papadomitsos. All Rights Reserved.
+%%% Copyright (c) 2022-2023 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%%
 
 -module(integration_suite).
@@ -24,27 +24,18 @@ suite() ->
   [{timetrap, {minutes, 1}}].
 
 init_per_suite(Config) ->
-    %% Starting Distributed Erlang on local node
-    {ok, _Pid} = gen_rpc_test_helper:start_distribution(this_node()),
-    %% Setup application logging
-    ok = gen_rpc_test_helper:set_application_environment(?MASTER),
-    %% Setup the simple TCP driver
-    ok = gen_rpc_test_helper:set_driver_configuration(tcp, ?MASTER),
-    %% Starting the application locally
+    ok = gen_rpc_test_helper:init_integration_test_config(),
     {ok, _MasterApps} = application:ensure_all_started(?APP),
     Config.
 
 end_per_suite(_Config) ->
     ok.
 
-this_node() ->
-    list_to_atom(os:getenv("NODE")).
-
 peers() ->
-    NodeStr = os:getenv("NODES"),
+    NodeStr = os:getenv("CLUSTER_NODES"),
     NodeList = string:tokens(NodeStr, [$:]),
     NodeNames = [list_to_atom("gen_rpc@" ++ Ip) || Ip <- NodeList],
-    NodeNames.
+    NodeNames -- [node()].
 
 %%% ===================================================
 %%% Test cases
