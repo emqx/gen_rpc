@@ -310,6 +310,8 @@ old_path(Config) ->
 %% build old version app
 %% ensure REBAR_PROFILE is 'default' because the 'test' profile
 %% uses a deprecated module
+%% have to use 'sed' command to delete the line '  , {fail_if_no_peer_cert, true}
+%% because this option is no longer allowed in newer version OTP (26)
 build_old_rel(Tag, Config) ->
     DataDir = filename:join(proplists:get_value(data_dir, Config), Tag),
     Ret = os:cmd("mkdir -p '" ++ DataDir ++ "' &&
@@ -317,6 +319,7 @@ build_old_rel(Tag, Config) ->
                   git clone https://github.com/emqx/gen_rpc.git || true &&
                   cd gen_rpc &&
                   git checkout '" ++ atom_to_list(Tag) ++ "' &&
+                  sed -i 's/^\s*, {fail_if_no_peer_cert, true}/%&/' include/ssl.hrl &&
                   env REBAR_PROFILE=default rebar3 compile &&
                   echo 'DONE'"),
     case lists:suffix("DONE\n", Ret) of

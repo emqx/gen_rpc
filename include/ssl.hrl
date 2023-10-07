@@ -16,9 +16,9 @@
 
 -define(SSL_DEFAULT_SERVER_OPTS,
         [{fail_if_no_peer_cert,true},
-        {log_alert,false},
-        {honor_cipher_order,true},
-        {client_renegotiation,true}]).
+         {log_alert,false},
+         {honor_cipher_order,true},
+         {client_renegotiation,true}]).
 
 -define(SSL_DEFAULT_CLIENT_OPTS,
         [{server_name_indication,disable},
