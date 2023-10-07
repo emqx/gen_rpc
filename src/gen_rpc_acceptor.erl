@@ -48,7 +48,7 @@
 %%% ===================================================
 %%% Supervisor functions
 %%% ===================================================
--spec start_link(atom(), {inet:ip4_address(), inet:port_number()}) -> gen_statem:startlink_ret().
+-spec start_link(atom(), {inet:ip4_address(), inet:port_number()}) -> {ok, pid()} | {error, any()}.
 start_link(Driver, Peer) when is_atom(Driver), is_tuple(Peer) ->
     Name = {acceptor, Peer},
     gen_statem:start_link({via, gen_rpc_registry, Name}, ?MODULE, {Driver, Peer}, []).

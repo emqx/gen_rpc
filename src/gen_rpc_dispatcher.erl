@@ -33,7 +33,7 @@
 %%% ===================================================
 %%% Public API
 %%% ===================================================
--spec start_link() -> gen_server:startlink_ret().
+-spec start_link() -> {ok, pid()} | {error, any()}.
 start_link() ->
     gen_server:start_link({local,?MODULE}, ?MODULE, [], []).
 

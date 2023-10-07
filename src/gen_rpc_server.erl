@@ -35,7 +35,7 @@
 %%% ===================================================
 %%% Supervisor functions
 %%% ===================================================
--spec start_link(atom()) -> gen_statem:startlink_ret().
+-spec start_link(atom()) -> {ok, pid()} | {error, any()}.
 start_link(Driver) when is_atom(Driver) ->
     case gen_rpc_helper:is_driver_enabled(Driver) of
         false -> ignore;

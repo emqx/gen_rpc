@@ -38,6 +38,8 @@
 
 -type packet() :: binary().
 
+-type port_number() :: 0..65535.
+
 %% Packets
 %% Client challenge:
 -record(gen_rpc_authenticate_c,
@@ -72,7 +74,7 @@
 %% API
 %%================================================================================
 
--spec connect_with_auth(module(), node(), inet:port()) ->
+-spec connect_with_auth(module(), node(), port_number()) ->
                 {ok, _Socket}
               | {error, auth_error()}
               | {unreachable, _Reason}.
@@ -307,7 +309,7 @@ send(Driver, Socket, Packet, Meta) ->
             throw({badtcp, send, Meta, Reason})
     end.
 
--spec connect_with_auth(module(), node(), inet:port(), fun((module(), node(), _Socket) -> ok | {error, auth_error()})) ->
+-spec connect_with_auth(module(), node(), port_number(), fun((module(), node(), _Socket) -> ok | {error, auth_error()})) ->
           {ok, _Socket} | {error, auth_error()} | {unreachable, _Reason}.
 connect_with_auth(Driver, Node, Port, Fun) ->
     case Driver:connect(Node, Port) of

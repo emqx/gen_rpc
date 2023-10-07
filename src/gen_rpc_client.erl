@@ -61,7 +61,7 @@
 %%% ===================================================
 %%% Supervisor functions
 %%% ===================================================
--spec start_link(node_or_tuple()) -> gen_server:startlink_ret().
+-spec start_link(node_or_tuple()) -> {ok, pid()} | {error, any()}.
 start_link(NodeOrTuple) when ?is_node_or_tuple(NodeOrTuple) ->
     gen_server:start_link({via, gen_rpc_registry, ?NAME(NodeOrTuple)}, ?MODULE, {NodeOrTuple}, []).
 
