@@ -218,6 +218,10 @@ get_async_call_inactivity_timeout() ->
     {ok, TTL} = application:get_env(?APP, async_call_inactivity_timeout),
     TTL.
 
+-spec get_user_tcp_opts(listen | accept | connect) -> list().
+get_user_tcp_opts(Type) ->
+    get_user_tcp_opts(?USER_TCP_OPTS, Type).
+
 %%% ===================================================
 %%% Private functions
 %%% ===================================================
@@ -247,10 +251,6 @@ hybrid_proplist_compare({K1,_V1}, {K2,_V2}) ->
 hybrid_proplist_compare(K1, K2) ->
     K1 =< K2.
 
--spec get_user_tcp_opts(listen | connect | accept) -> list().
-get_user_tcp_opts(Type) ->
-    get_user_tcp_opts(?USER_TCP_OPTS, Type).
-
 get_user_tcp_opts(Keys, Type) ->
     lists:foldl(
         fun(Key, OptAcc) ->
@@ -258,23 +258,59 @@ get_user_tcp_opts(Keys, Type) ->
                 undefined -> OptAcc;
                 {ok, Val} -> [{user_tcp_opt_key(Key), Val} | OptAcc]
             end
-        end, [], Keys) ++
-    case Type =/= accept andalso get_socket_ip() of
-        {ok, Ip} when tuple_size(Ip) =:= 8 ->
-            %% self node is listening on a ipv6 address
-            %% assume all peers are listening on ipv6 addresses
+        end, [], Keys) ++ ipv6_opts(Type).
+
+%% Add 'inet6' to listen and connect options when 'ipv6_only' is configured 'true'
+%% There is no need to force with 'ipv6_v6only' in inet options
+%% becase we control both client and server code.
+%% That is, it's enough to provide just 'inet6' option in connect options and
+%% the client will try to connect server using ipv6.
+ipv6_opts(accept) ->
+    %% 'inet6' is not a valid option for 'inet:setopts' (for acceptor)
+    [];
+ipv6_opts(_) ->
+    case {get_socket_ip(), is_ipv6_only()} of
+        {{inet6, _Ip}, true} ->
+            %% Configured to lisetn on ipv6 and want to use v6 only, add 'inet6' option.
+            [inet6];
+        {undefined, true} ->
+            %% Listen address is ont configured.
+            %% We try to add 'inet6' for both server and client.
             [inet6];
         _ ->
+            %% When self-node is configured to listen on ipv4:
+            %%   'listen':  it should absolutely not add 'inet6' option.
+            %%   'connect': it is very much unlikely that the peer accepts
+            %%              ipv6-only client hence no need to add 'inet6'
+            %% Wehn self-node is configured to listen on ipv6:
+            %%   'listen':  there is no need to add 'inet6' because the
+            %%              8-tuple already implied 'inet6'.
+            %%   'connect': it will by default try to connect server
+            %%              with ipv4, server should usually accept it
+            %%              even it is only listening on a v6 address.
+            %%              This should allow a rolling upgrade of
+            %%              nodes when deployed in a dule-stack
+            %%              network.
             []
     end.
 
+is_ipv6_only() ->
+    {ok, true} =:= application:get_env(ipv6_only).
+
 get_socket_ip() ->
-    application:get_env(?APP, socket_ip).
+    case application:get_env(?APP, socket_ip) of
+        {ok, Ip} when is_tuple(Ip) andalso tuple_size(Ip) =:= 4 ->
+            {inet, Ip};
+        {ok, Ip} when is_tuple(Ip) andalso tuple_size(Ip) =:= 8 ->
+            {inet6, Ip};
+        _ ->
+            undefined
+    end.
 
 get_listen_ip_config() ->
     case get_socket_ip() of
         undefined -> [];
-        {ok, IP} -> [{ip, IP}]
+        {_, IP} -> [{ip, IP}]
     end.
 
 user_tcp_opt_key(socket_buffer) -> buffer;

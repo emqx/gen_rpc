@@ -42,17 +42,24 @@
 init_integration_test_config() ->
     _ = application:load(gen_rpc),
     ProjRoot = os:getenv("PROJ_ROOT"),
-    case os:getenv("TEST_WITH_IPV6") of
-        "true" ->
-            io:format(user, "===< Setting socket_ip to ipv6~n", []),
-            {ok, Ip} = inet:parse_address("::"),
+    case os:getenv("TEST_WITH_SOCKET_IP") of
+        [_|_] = IpStr ->
+            {ok, Ip} = inet:parse_address(IpStr),
+            io:format(user, "===< Setting 'socket_ip' ~p~n", [Ip]),
             ok = set_env(socket_ip, Ip);
         _ ->
-            io:format(user, "===< Not testing with Ipv6~n", [])
+            io:format(user, "===< Not setting 'socket_ip'~n", [])
+    end,
+    case os:getenv("TEST_WITH_IPV6ONLY") of
+        "true" ->
+            io:format(user, "===< Setting 'ipv6_only' to 'true'~n", []),
+            ok = set_env(ipv6_only, true);
+        _ ->
+            io:format(user, "===< Not forcing 'ipv6_only'", [])
     end,
     case os:getenv("TEST_WITH_SSL") of
         "true" ->
-            io:format(user, "===< Setting default driver to ssl~n", []),
+            io:format(user, "===< Setting default driver to 'ssl'~n", []),
             ok = set_env(default_client_driver, ssl),
             %% disable tcp
             ok = set_env(tcp_server_port, false),

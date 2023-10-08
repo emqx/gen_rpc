@@ -4,8 +4,9 @@ set -euo pipefail
 
 NUM_OF_NODES="${1}"
 RUN_CT="${2:-true}"
-IPV6="${IPV6:-false}"
+LISTEN="${LISTEN:-"0.0.0.0"}"
 SSL="${SSL:-false}"
+V6ONLY="${V6ONLY:-false}"
 
 destroy() {
     local NAME
@@ -26,7 +27,7 @@ if [ -z "${DOCKER_NET:-}" ]; then
     export DOCKER_NET="gen.rpc"
     destroy
     docker network rm $DOCKER_NET || true
-    if [ "$IPV6" = 'true' ]; then
+    if [ "$LISTEN" = '::' ]; then
         docker network create --ipv6 --subnet 2001:0DB8::/112 $DOCKER_NET
     else
         docker network create $DOCKER_NET
@@ -59,14 +60,16 @@ start_node() {
     if [ "$IS_CT" = 'no_dont_run_ct' ]; then
         docker exec -d \
             -e PROJ_ROOT="${PROJ_ROOT}" \
-            -e TEST_WITH_IPV6="${IPV6}" \
+            -e TEST_WITH_SOCKET_IP="${LISTEN}" \
+            -e TEST_WITH_IPV6ONLY="${V6ONLY}" \
             -e TEST_WITH_SSL="${SSL}" \
             "${NAME}" \
             bash -c "rebar3 as test shell --name gen_rpc@${NAME} --script ${SCRIPT_FILE} > shell.log"
     else
         docker exec \
             -e PROJ_ROOT="${PROJ_ROOT}" \
-            -e TEST_WITH_IPV6="${IPV6}" \
+            -e TEST_WITH_SOCKET_IP="${LISTEN}" \
+            -e TEST_WITH_IPV6ONLY="${V6ONLY}" \
             -e TEST_WITH_SSL="${SSL}" \
             -e CLUSTER_NODES="${CLUSTER_NODES}" \
             "${NAME}" \

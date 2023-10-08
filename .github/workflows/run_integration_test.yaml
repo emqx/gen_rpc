@@ -23,3 +23,11 @@ jobs:
         - name: Docker Test Ipv6 SSL
           run: |
             make docker-test-ipv6-ssl
+
+        - name: Docker Test Ipv6-only TCP
+          run: |
+            env V6ONLY=true make docker-test-ipv6
+
+        - name: Docker Test Ipv6-only SSL
+          run: |
+            env V6ONLY=true make docker-test-ipv6-ssl

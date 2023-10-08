@@ -40,13 +40,13 @@ docker-test: docker
 	@./test/integration/integration-tests.sh $(NODES)
 
 docker-test-ssl: docker
-	@env SSL=true ./test/integration/integration-tests.sh $(NODES)
+	@env LISTEN="0.0.0.0" SSL=true ./test/integration/integration-tests.sh $(NODES)
 
 docker-test-ipv6: docker
-	@env IPV6=true ./test/integration/integration-tests.sh $(NODES)
+	@env LISTEN="::" ./test/integration/integration-tests.sh $(NODES)
 
 docker-test-ipv6-ssl: docker
-	@env IPV6=true SSL=true ./test/integration/integration-tests.sh $(NODES)
+	@env LISTEN="::" SSL=true ./test/integration/integration-tests.sh $(NODES)
 
 docker-cluster: docker
 	@./test/integration/integration-tests.sh $(NODES) false

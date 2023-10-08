@@ -81,7 +81,12 @@
         %% Probes lost to close the connection
         {socket_keepalive_count, 2},
         %% Local network interface to use.
-        {socket_ip, {0,0,0,0}}
+        %% Set {0,0,0,0,0,0,0,0} to make server listen on all IPv6 interfaces.
+        %% NOTE: IPv6 listener usualy accepts IPv4 clients,
+        %% to force IPv6 only, set 'ipv6_only' option to 'true'
+        {socket_ip, {0,0,0,0}},
+        %% NOTE: this option has no effect unless 'socket_ip' is an IPv6 interface.
+        {ipv6_only, false}
     ]},
     {modules, []}]
 }.

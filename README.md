@@ -174,6 +174,10 @@ and pass them as the node list in the multi-node function.
 
 - `socket_keepalive_count`: Probs lost to consider the socket closed
 
+- `socket_ip`: A IP-tuple like `{0,0,0,0}` (default, IPv4) or `{0,0,0,0,0,0,0,0}` (IPv6) for listener to listen on. Values other than a 4-tuple or a 8-tuple are silently discarded.
+
+- `ipv6_only`: Boolean (default = false) to force server and client to use ipv6. This config only takes effect when `socket_ip` is a 8-tuple (IPv6).
+
 ## Logging
 
 `gen_rpc` uses [hut](https://github.com/tolbrino/hut) for logging. This allows the developer to integrate the logging library of their choice by providing the appropriate definition in their `rebar.config`. The default logging facility of `hut` is SASL.
