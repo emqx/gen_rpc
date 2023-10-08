@@ -2,9 +2,10 @@
 
 Below is a non-exhaustive list of changes between `gen_rpc` versions.
 
-## 3.1.2
+## 3.2.0
 
-- Fix peer address format crash ipv6 is in use.
+- Add config 'ipv6_only' to support IPv6 only network.
+- Fix peer address format crash when IPv6 is configred for 'socket_ip'.
 
 ## 3.1.1
 
