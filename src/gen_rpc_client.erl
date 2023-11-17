@@ -305,7 +305,7 @@ handle_cast({{async_call,_M,_F,_A} = PacketTuple, Caller, Ref}, #state{socket=So
     ?log(debug, "message=async_call event=constructing_async_call_term socket=\"~s\" worker_pid=\"~p\" async_call_ref=\"~p\"",
          [gen_rpc_helper:socket_to_string(Socket), Caller, Ref]),
     ok = DriverMod:set_send_timeout(Socket, undefined),
-    case DriverMod:send(Socket, Packet) of
+    case DriverMod:send_async(Socket, Packet) of
         {error, Reason} ->
             ?log(error, "message=async_call event=transmission_failed driver=~s socket=\"~s\" worker_pid=\"~p\" call_ref=\"~p\" reason=\"~p\"",
                  [Driver, gen_rpc_helper:socket_to_string(Socket), Caller, Ref, Reason]),
@@ -392,6 +392,12 @@ handle_info({keepalive, check}, #state{driver=Driver, keepalive=KeepAlive} = Sta
             {stop, Reason, State}
     end;
 
+handle_info({inet_reply, _Socket, ok}, State) ->
+    {noreply, State};
+
+handle_info({inet_reply, _Socket, {error, Reason}}, State) ->
+    {stop, {async_send_error, Reason}, State};
+
 %% Catch-all for info - our protocol is strict so die!
 handle_info(Msg, #state{socket=Socket, driver=Driver} = State) ->
     ?log(error, "event=uknown_message_received driver=~s socket=\"~s\" message=\"~p\" action=stopping",
@@ -417,7 +423,7 @@ send_cast(PacketTuple, #state{socket=Socket, driver=Driver, driver_mod=DriverMod
                               }),
     Packet = erlang:term_to_binary(PacketTuple),
     ok = DriverMod:set_send_timeout(Socket, SendTimeout),
-    case DriverMod:send(Socket, Packet) of
+    case DriverMod:send_async(Socket, Packet) of
         {error, Reason} ->
             ?tp(error, gen_rpc_error, #{ error  => transmission_failed
                                        , packet => cast

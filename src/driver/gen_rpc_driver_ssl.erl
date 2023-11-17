@@ -30,6 +30,7 @@
          accept/1,
          get_peer/1,
          send/2,
+         send_async/2,
          activate_socket/1,
          recv/3,
          close/1,
@@ -94,6 +95,11 @@ send(Socket, Data) when is_tuple(Socket), is_binary(Data) ->
             ?tp(gen_rpc_driver_send_ok, #{driver => ssl}),
             ok
     end.
+
+-spec send_async(ssl:sslsocket(), binary()) -> ok | {error, term()}.
+send_async(Socket, Data) ->
+    %% the ssl module don't support async send, we call the sync send here
+    send(Socket, Data).
 
 -spec activate_socket(ssl:sslsocket()) -> ok | {error, inet:posix()}.
 activate_socket(Socket) when is_tuple(Socket) ->
