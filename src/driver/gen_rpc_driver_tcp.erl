@@ -28,6 +28,7 @@
         accept/1,
         get_peer/1,
         send/2,
+        send_async/2,
         activate_socket/1,
         recv/3,
         close/1,
@@ -81,6 +82,32 @@ send(Socket, Data) when is_port(Socket), is_binary(Data) ->
             ?log(debug, "event=send_data_succeeded socket=\"~s\"", [gen_rpc_helper:socket_to_string(Socket)]),
             ok
     end.
+
+-spec send_async(port(), binary()) -> ok | {error, term()}.
+send_async(Socket, Data) when is_port(Socket), is_binary(Data) ->
+    %% Sometimes the gen_rpc_client will be flooded if it already have a very long message queue.
+    %% This is because there's a receive statement in the gen_tcp:send/2, which becomes more and more
+    %%  slower when the message queue grows. So we use port_command to send data asynchronously.
+    case send_tcp_data(Socket, Data) of
+        {error, Reason} ->
+            ?log(error, "event=send_async_failed socket=\"~s\" reason=\"~p\"", [gen_rpc_helper:socket_to_string(Socket), Reason]),
+            {error, {badtcp,Reason}};
+        ok ->
+            ?log(debug, "event=send_async_succeeded socket=\"~s\"", [gen_rpc_helper:socket_to_string(Socket)]),
+            ok
+    end.
+
+-if(?OTP_RELEASE >= 26).
+send_tcp_data(Sock, Data) ->
+    gen_tcp:send(Sock, Data).
+-else.
+send_tcp_data(Sock, Data) ->
+    try erlang:port_command(Sock, Data) of
+        true -> ok
+    catch
+        error:badarg -> {error, einval}
+    end.
+-endif.
 
 -spec recv(gen_tcp:socket(), non_neg_integer(), timeout()) -> {ok, binary()} | {error, _}.
 recv(Socket, Length, Timeout) ->
