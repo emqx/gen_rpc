@@ -496,7 +496,9 @@ async_call_worker(NodeOrTuple, M, F, A, Ref) ->
                     ok = gen_server:cast(NewPid, {{async_call,M,F,A}, self(), Ref}),
                     NewPid;
                 {error, {badrpc,_} = RpcError} ->
-                    RpcError
+                    RpcError;
+                {error, Error} ->
+                    {badrpc, Error}
             end;
         Pid ->
             ?log(debug, "event=client_process_found pid=\"~p\" target=\"~p\"", [Pid, NodeOrTuple]),
