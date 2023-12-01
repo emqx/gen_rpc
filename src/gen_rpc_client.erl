@@ -239,7 +239,7 @@ init({Node}) ->
             {stop, {badrpc, {external_source_error, Reason}}};
         {Driver, Port} ->
             {DriverMod, DriverClosed, DriverError} = gen_rpc_helper:get_client_driver_options(Driver),
-            ?log(info, "event=initializing_client driver=~s node=\"~s\" port=~B", [Driver, Node, Port]),
+            ?log(debug, "event=initializing_client driver=~s node=\"~s\" port=~B", [Driver, Node, Port]),
             case gen_rpc_auth:connect_with_auth(DriverMod, Node, Port) of
                 {ok, Socket} ->
                     Interval = application:get_env(?APP, keepalive_interval, 60), % 60s
@@ -376,7 +376,7 @@ handle_info({DriverError, Socket, Reason}, #state{socket=Socket, driver=Driver, 
 
 %% Handle the inactivity timeout gracefully
 handle_info(timeout, #state{socket=Socket, driver=Driver} = State) ->
-    ?log(info, "message=timeout event=client_inactivity_timeout driver=~s socket=\"~s\" action=stopping",
+    ?log(debug, "message=timeout event=client_inactivity_timeout driver=~s socket=\"~s\" action=stopping",
          [Driver, gen_rpc_helper:socket_to_string(Socket)]),
     {stop, normal, State};
 
@@ -468,7 +468,7 @@ cast_worker(NodeOrTuple, Cast, Ret, SendTimeout) ->
                         }),
     case gen_rpc_registry:whereis_name(PidName) of
         undefined ->
-            ?tp(info, gen_rpc_client_process_not_found, #{target => NodeOrTuple}),
+            ?tp(debug, gen_rpc_client_process_not_found, #{target => NodeOrTuple}),
             case gen_rpc_dispatcher:start_client(NodeOrTuple) of
                 {ok, NewPid} ->
                     %% We take care of CALL inside the gen_server
@@ -490,7 +490,7 @@ async_call_worker(NodeOrTuple, M, F, A, Ref) ->
     PidName = ?NAME(NodeOrTuple),
     SrvPid = case gen_rpc_registry:whereis_name(PidName) of
         undefined ->
-            ?log(info, "event=client_process_not_found target=\"~p\" action=spawning_client", [NodeOrTuple]),
+            ?log(debug, "event=client_process_not_found target=\"~p\" action=spawning_client", [NodeOrTuple]),
             case gen_rpc_dispatcher:start_client(NodeOrTuple) of
                 {ok, NewPid} ->
                     ok = gen_server:cast(NewPid, {{async_call,M,F,A}, self(), Ref}),
@@ -584,7 +584,7 @@ maybe_start_client(NodeOrTuple) ->
     PidName = ?NAME(NodeOrTuple),
     case gen_rpc_registry:whereis_name(PidName) of
         undefined ->
-            ?log(info, "event=client_process_not_found target=\"~p\" action=spawning_client", [NodeOrTuple]),
+            ?log(debug, "event=client_process_not_found target=\"~p\" action=spawning_client", [NodeOrTuple]),
             gen_rpc_dispatcher:start_client(NodeOrTuple);
         Pid ->
             {ok, Pid}
