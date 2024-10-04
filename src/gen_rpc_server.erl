@@ -1,6 +1,7 @@
 %%% -*-mode:erlang;coding:utf-8;tab-width:4;c-basic-offset:4;indent-tabs-mode:()-*-
 %%% ex: set ft=erlang fenc=utf-8 sts=4 ts=4 sw=4 et:
 %%%
+%%% Copyright 2024 EMQ Technologies Co, Ltd. All Rights Reserved.
 %%% Copyright 2015 Panagiotis Papadomitsos. All Rights Reserved.
 %%%
 %%% Original concept inspired and some code copied from
@@ -69,16 +70,25 @@ callback_mode() ->
 waiting_for_connection(internal, accept, #state{socket=ListSock, driver=Driver, driver_mod=DriverMod} = State) ->
     case DriverMod:accept(ListSock) of
         {ok, AccSock} ->
-            ?log(info, "event=client_connection_received driver=~s socket=\"~s\" action=starting_acceptor",
-                 [Driver, gen_rpc_helper:socket_to_string(ListSock)]),
-            Peer = DriverMod:get_peer(AccSock),
-            {ok, AccPid} = gen_rpc_acceptor_sup:start_child(Driver, Peer),
-            case DriverMod:copy_sock_opts(ListSock, AccSock) of
-                ok -> ok;
-                {error, Reason} -> exit({set_sock_opt, Reason})
+            %% `gen_rpc_server' is a main process, it should never
+            %% crash due to client misbehavior. So we wrap everything
+            %% in try/catch.
+            try
+                ?log(info, "event=client_connection_received driver=~s socket=\"~s\" action=starting_acceptor",
+                     [Driver, gen_rpc_helper:socket_to_string(ListSock)]),
+                Peer = DriverMod:get_peer(AccSock),
+                {ok, AccPid} = gen_rpc_acceptor_sup:start_child(Driver, Peer),
+                case DriverMod:copy_sock_opts(ListSock, AccSock) of
+                    ok -> ok;
+                    {error, Reason} -> exit({set_sock_opt, Reason})
+                end,
+                ok = DriverMod:set_controlling_process(AccSock, AccPid),
+                ok = gen_rpc_acceptor:set_socket(AccPid, AccSock)
+            catch
+                EC:Err:Stack ->
+                    ?log(warning, "event=failed_to_accept driver=~p ~p=~p stack=~p",
+                         [Driver, EC, Err, Stack])
             end,
-            ok = DriverMod:set_controlling_process(AccSock, AccPid),
-            ok = gen_rpc_acceptor:set_socket(AccPid, AccSock),
             {keep_state_and_data, {next_event,internal,accept}};
         {error, Reason} ->
             ?log(error, "event=socket_error_event driver=~s socket=\"~s\" event=\"~p\" action=stopping",
