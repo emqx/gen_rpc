@@ -1,41 +1,20 @@
 %% -*- mode: erlang -*-
 %% Unless you know what you are doing, DO NOT edit manually!!
 {VSN,
+  [%% e4.4.12 uses gen_rpc 3.0.1
+   {<<"3.0.[1-2]">>,
+    [{load_module,gen_rpc_server,brutal_purge,soft_purge,[]},
+     {load_module,gen_rpc_client,brutal_purge,soft_purge,[]},
+     {load_module,gen_rpc_driver_ssl,brutal_purge,soft_purge,[]},
+     {load_module,gen_rpc_driver_tcp,brutal_purge,soft_purge,[]}]},
+   %% e4.4.11 uses gen_rpc 2.7.2, restart it as we have too many code change
+   {<<".*">>, [{restart_application, gen_rpc}]}
+  ],
   [{<<"3.0.[1-2]">>,
     [{load_module,gen_rpc_server,brutal_purge,soft_purge,[]},
      {load_module,gen_rpc_client,brutal_purge,soft_purge,[]},
      {load_module,gen_rpc_driver_ssl,brutal_purge,soft_purge,[]},
      {load_module,gen_rpc_driver_tcp,brutal_purge,soft_purge,[]}]},
-   {<<"2.8.[1-2]">>,
-    [{add_module,gen_rpc_auth},
-     {load_module,gen_rpc_server,brutal_purge,soft_purge,[]},
-     {load_module,gen_rpc,brutal_purge,soft_purge,[]},
-     {load_module,gen_rpc_driver,brutal_purge,soft_purge,[]},
-     {load_module,gen_rpc_dispatcher,brutal_purge,soft_purge,[]},
-     {load_module,gen_rpc_client_sup,brutal_purge,soft_purge,[]},
-     {load_module,gen_rpc_client,brutal_purge,soft_purge,[]},
-     {load_module,gen_rpc_acceptor_sup,brutal_purge,soft_purge,[]},
-     {load_module,gen_rpc_acceptor,brutal_purge,soft_purge,[]},
-     {load_module,gen_rpc_helper,brutal_purge,soft_purge,[]},
-     {load_module,gen_rpc_driver_ssl,brutal_purge,soft_purge,[]},
-     {load_module,gen_rpc_driver_tcp,brutal_purge,soft_purge,[]}]},
-   {<<".*">>,[]}],
-  [{<<"3.0.[1-2]">>,
-    [{load_module,gen_rpc_server,brutal_purge,soft_purge,[]},
-     {load_module,gen_rpc_client,brutal_purge,soft_purge,[]},
-     {load_module,gen_rpc_driver_ssl,brutal_purge,soft_purge,[]},
-     {load_module,gen_rpc_driver_tcp,brutal_purge,soft_purge,[]}]},
-   {<<"2.8.[1-2]">>,
-    [{load_module,gen_rpc,brutal_purge,soft_purge,[]},
-     {load_module,gen_rpc_server,brutal_purge,soft_purge,[]},
-     {load_module,gen_rpc_driver,brutal_purge,soft_purge,[]},
-     {load_module,gen_rpc_dispatcher,brutal_purge,soft_purge,[]},
-     {load_module,gen_rpc_client_sup,brutal_purge,soft_purge,[]},
-     {load_module,gen_rpc_client,brutal_purge,soft_purge,[]},
-     {load_module,gen_rpc_acceptor_sup,brutal_purge,soft_purge,[]},
-     {load_module,gen_rpc_acceptor,brutal_purge,soft_purge,[]},
-     {load_module,gen_rpc_helper,brutal_purge,soft_purge,[]},
-     {load_module,gen_rpc_driver_ssl,brutal_purge,soft_purge,[]},
-     {load_module,gen_rpc_driver_tcp,brutal_purge,soft_purge,[]},
-     {delete_module,gen_rpc_auth}]},
-   {<<".*">>,[]}]}.
+   {<<".*">>, [{restart_application, gen_rpc}]}
+  ]
+}.
