@@ -124,6 +124,9 @@ and pass them as the node list in the multi-node function.
         port = 65535
       4. node_name = `emqx60166@127.0.0.1`:
         invalid and gen_rpc cannot get started
+- `compress`: A number (default = 0) from 0 to 9 to define level of compression.
+
+- `compression_threshold`: The minimum amount of bytes (default = 1024) needed to be worth compressing the TCP message sent.
 
 - `tcp_server_port`: The plain TCP port `gen_rpc` will use for incoming connections or `false` if you
   do not want plain TCP enabled. Only takes effect when `port_discovery` = `manual`.
