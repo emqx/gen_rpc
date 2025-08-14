@@ -17,6 +17,8 @@
 %%% Include helpful guard macros
 -include("types.hrl").
 
+-include_lib("snabbkaffe/include/trace.hrl").
+
 -define(DEFAULT_LISTEN_PORT, 5370).
 -define(MAX_PORT_LIMIT, 60000).
 
@@ -41,11 +43,35 @@
          get_control_receive_timeout/0,
          get_inactivity_timeout/1,
          get_async_call_inactivity_timeout/0,
-         get_listen_ip_config/0]).
+         get_listen_ip_config/0,
+         term_to_iovec/1]).
 
 %%% ===================================================
 %%% Public API
 %%% ===================================================
+
+%% term_to_iovec/1 wrapper to conditionally compress based on threshold
+-spec term_to_iovec(term()) -> erlang:iovec().
+term_to_iovec(Term) ->
+  {ok, Compress} = application:get_env(?APP, compress),
+  do_term_to_iovec(Term, Compress).
+
+do_term_to_iovec(Term, Compress) when is_integer(Compress), Compress >= 1, Compress =< 9 ->
+    Size = erlang:external_size(Term),
+    {ok, CompressionThreshold} = application:get_env(?APP, compression_threshold),
+    case Size > CompressionThreshold of
+        true  ->
+            Data = erlang:term_to_iovec(Term, [{compressed, Compress}]),
+            ?tp_ignore_side_effects_in_prod(gen_rpc_compress_payload, #{ threshold => CompressionThreshold,
+                                                                         original_size => Size,
+                                                                         compressed_size => iolist_size(Data)
+                                                                       }),
+            Data;
+        false -> erlang:term_to_iovec(Term)
+    end;
+do_term_to_iovec(Term, _) ->
+    erlang:term_to_iovec(Term).
+
 %% Return the connected peer's IP
 -spec peer_to_string({inet:ip_address(), inet:port_number()} | inet:ip_address()) -> string().
 peer_to_string({Ip, Port}) when tuple_size(Ip) =:= 4 ->

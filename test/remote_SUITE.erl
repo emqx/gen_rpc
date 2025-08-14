@@ -87,6 +87,89 @@ end_per_testcase(_Testcase, Config) ->
 call(_Config) ->
     {_Mega, _Sec, _Micro} = gen_rpc:call(?SLAVE, os, timestamp).
 
+call_compress_above_threshold(_Config) ->
+    ok = application:set_env(?APP, compress, 1),
+    ok = application:set_env(?APP, compression_threshold, 500),
+    ok = rpc:call(?SLAVE, application, set_env, [?APP, compress, 1]),
+    ok = rpc:call(?SLAVE, application, set_env, [?APP, compression_threshold, 500]),
+
+    Term = << <<(I)>> || I <- lists:seq(1, 5000) >>,
+    ?check_trace(
+        begin
+            ?assertEqual(Term, gen_rpc:call(?SLAVE, erlang, hd, [[Term]]))
+        end,
+        fun(Trace) ->
+            [Req, Reply] = ?of_kind(gen_rpc_compress_payload, Trace),
+            #{ original_size := 5146,
+               threshold := 500,
+               compressed_size := CompressedSizeReq,
+               ?snk_meta := #{node := NodeReq}
+             } = Req,
+            ?assertEqual(NodeReq, node()),
+            ?give_or_take(_Expected1 = 448, _Deviation1 = 5, CompressedSizeReq),
+
+            #{ original_size := 5120,
+               threshold := 500,
+               compressed_size := CompressedSizeReply,
+               ?snk_meta := #{node := NodeReply}
+             } = Reply,
+            ?assertEqual(NodeReply, ?SLAVE),
+            ?give_or_take(_Expected2 = 425, _Deviation2 = 5, CompressedSizeReply)
+        end).
+
+call_compress_above_threshold_higher_compression_level(_Config) ->
+    ok = application:set_env(?APP, compress, 9),
+    ok = application:set_env(?APP, compression_threshold, 500),
+    ok = rpc:call(?SLAVE, application, set_env, [?APP, compress, 9]),
+    ok = rpc:call(?SLAVE, application, set_env, [?APP, compression_threshold, 500]),
+
+    Term = << <<(I)>> || I <- lists:seq(1, 5000) >>,
+    ?check_trace(
+        begin
+            ?assertEqual(Term, gen_rpc:call(?SLAVE, erlang, hd, [[Term]]))
+        end,
+        fun(Trace) ->
+                [Req, Reply] = ?of_kind(gen_rpc_compress_payload, Trace),
+                #{ original_size := 5146,
+                   threshold := 500,
+                   compressed_size := CompressedSizeReq,
+                   ?snk_meta := #{node := NodeReq}
+                 } = Req,
+                ?assertEqual(NodeReq, node()),
+                ?give_or_take(_Expected1 = 439, _Deviation1 = 5, CompressedSizeReq),
+
+                #{ original_size := 5120,
+                   threshold := 500,
+                   compressed_size := CompressedSizeReply,
+                   ?snk_meta := #{node := NodeReply}
+                 } = Reply,
+                ?assertEqual(NodeReply, ?SLAVE),
+                ?give_or_take(_Expected2 = 417, _Deviation2 = 5, CompressedSizeReply)
+        end).
+
+call_compress_below_threshold(_Config) ->
+    ok = application:set_env(?APP, compress, 9),
+    ok = application:set_env(?APP, compression_threshold, 500),
+    ok = rpc:call(?SLAVE, application, set_env, [?APP, compress, 9]),
+    ok = rpc:call(?SLAVE, application, set_env, [?APP, compression_threshold, 300]),
+
+    Term = rand:bytes(100),
+    ?check_trace(
+       begin
+         ?assertEqual(Term, gen_rpc:call(?SLAVE, erlang, hd, [[Term]]))
+       end,
+       fun(Trace) -> ?assertNotMatch([_], ?of_kind(gen_rpc_compress_payload, Trace)) end).
+
+call_compress_disabled(_Config) ->
+    ok = application:set_env(?APP, compress, 0),
+    ok = application:set_env(?APP, compression_threshold, 300),
+    Term = rand:bytes(500),
+    ?check_trace(
+       begin
+         500 = gen_rpc:call(?SLAVE, erlang, byte_size, [Term])
+       end,
+       fun(Trace) -> ?assertNotMatch([_], ?of_kind(gen_rpc_compress_payload, Trace)) end).
+
 call_mfa_undef(_Config) ->
     {badrpc, {'EXIT', {undef,[{os,timestamp_undef,_,_},_]}}} = gen_rpc:call(?SLAVE, os, timestamp_undef).
 
@@ -122,6 +205,26 @@ interleaved_call(_Config) ->
 
 cast(_Config) ->
     true = gen_rpc:cast(?SLAVE, erlang, timestamp).
+
+cast_compressed(_Config) ->
+    ok = application:set_env(?APP, compress, 1),
+    ok = application:set_env(?APP, compression_threshold, 500),
+
+    Term = << <<(I)>> || I <- lists:seq(1, 5000) >>,
+    ?check_trace(
+        begin
+            true = gen_rpc:cast(?SLAVE, erlang, hd, [[Term]]),
+            ?block_until(#{?snk_kind := gen_rpc_compress_payload})
+        end,
+        fun(Trace) ->
+            [#{ original_size := 5038,
+                threshold := 500,
+                compressed_size := CompressedSizeReq,
+                ?snk_meta := #{node := NodeReq}
+              }] = ?of_kind(gen_rpc_compress_payload, Trace),
+            ?assertEqual(NodeReq, node()),
+            ?give_or_take(_Expected1 = 371, _Deviation1 = 5, CompressedSizeReq)
+        end).
 
 cast_mfa_undef(_Config) ->
     true = gen_rpc:cast(?SLAVE, os, timestamp_undef, []).
@@ -236,6 +339,37 @@ async_call(_Config) ->
     "yield_key" = gen_rpc:yield(YieldKey),
     NbYieldKey = gen_rpc:async_call(?SLAVE, io_lib, print, [nb_yield_key]),
     {value, "nb_yield_key"} = gen_rpc:nb_yield(NbYieldKey, 50).
+
+async_call_compressed(_Config) ->
+    ok = application:set_env(?APP, compress, 1),
+    ok = application:set_env(?APP, compression_threshold, 500),
+    ok = rpc:call(?SLAVE, application, set_env, [?APP, compress, 1]),
+    ok = rpc:call(?SLAVE, application, set_env, [?APP, compression_threshold, 500]),
+
+    Term = << <<(I)>> || I <- lists:seq(1, 5000) >>,
+    ?check_trace(
+       begin
+         YieldKey = gen_rpc:async_call(?SLAVE, erlang, hd, [[Term]]),
+         ?assertEqual(Term, gen_rpc:yield(YieldKey))
+       end,
+       fun(Trace) ->
+           [Req, Reply] = ?of_kind(gen_rpc_compress_payload, Trace),
+           #{ original_size := 5132,
+              threshold := 500,
+              compressed_size := CompressedSizeReq,
+              ?snk_meta := #{node := NodeReq}
+            } = Req,
+           ?assertEqual(NodeReq, node()),
+           ?give_or_take(_Expected1 = 438, _Deviation1 = 5, CompressedSizeReq),
+
+           #{ original_size := 5106,
+              threshold := 500,
+              compressed_size := CompressedSizeReply,
+              ?snk_meta := #{node := NodeReply}
+            } = Reply,
+           ?assertEqual(NodeReply, ?SLAVE),
+           ?give_or_take(_Expected2 = 414, _Deviation2 = 5, CompressedSizeReply)
+       end).
 
 async_call_yield_reentrant(_Config) ->
     YieldKey0 = gen_rpc:async_call(?SLAVE, os, timestamp, []),
