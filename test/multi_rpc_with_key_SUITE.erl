@@ -114,6 +114,14 @@ abcast_with_bad_server(_Config) ->
     end,
     true = erlang:unregister(test_process_123).
 
+abcast_with_unregistered_name(_Config) ->
+    abcast = rpc:call(?SLAVE, gen_rpc, abcast, [[{?MASTER,random_key}, ?FAKE_NODE], test_process_123, this_is_a_test]),
+    receive
+        _ -> erlang:error(invalid_message)
+    after
+        2000 -> ok
+    end.
+
 sbcast(_Config) ->
     true = erlang:register(test_process_123, self()),
     {[{?MASTER,random_key}], []} = rpc:call(?SLAVE, gen_rpc, sbcast, [[{?MASTER,random_key}], test_process_123, this_is_a_test]),

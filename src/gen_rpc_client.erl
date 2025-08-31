@@ -372,14 +372,10 @@ handle_cast(Msg, #state{socket=Socket, driver=Driver} = State) ->
     {stop, {unknown_cast, Msg}, State}.
 
 %% This is the actual CAST handler for CAST
-handle_info({{Cast, _M, _F, _A} = PacketTuple, SendTimeout}, State = #state{max_batch_size = 0}) when ?IS_CAST(Cast) ->
+handle_info({PacketTuple, SendTimeout}, State = #state{max_batch_size = 0}) when ?IS_CAST_MSG(PacketTuple) ->
     send_cast(PacketTuple, State, SendTimeout, true);
-handle_info({{Cast, _M, _F, _A} = PacketTuple, SendTimeout}, State = #state{max_batch_size = MaxBatchSize}) when ?IS_CAST(Cast) ->
+handle_info({PacketTuple, SendTimeout}, State = #state{max_batch_size = MaxBatchSize}) when ?IS_CAST_MSG(PacketTuple) ->
     send_cast(drain_cast(MaxBatchSize, [PacketTuple]), State, SendTimeout, true);
-
-%% This is the actual CAST handler for ABCAST
-handle_info({{abcast,_Name,_Msg} = PacketTuple, undefined}, State) ->
-    send_cast(PacketTuple, State, undefined, false);
 
 %% This is the actual CAST handler for SBCAST
 handle_info({{sbcast,_Name,_Msg,_Caller} = PacketTuple, undefined}, State) ->
@@ -648,10 +644,13 @@ parse_sbcast_results([], _Ref, Results, _Timeout) ->
     Results.
 
 drain_cast(N, CastReqs) when N =< 0 ->
+    ?tp_ignore_side_effects_in_prod(gen_rpc_cast_batch, #{ size => length(CastReqs) }),
     lists:reverse(CastReqs);
 drain_cast(N, CastReqs) ->
     receive
         {?CAST(_M,_F,_A) = Req, _} ->
+            drain_cast(N-1, [Req | CastReqs]);
+        {?ABCAST(_N, _M) = Req, _} ->
             drain_cast(N-1, [Req | CastReqs]);
         {?ORDERED_CAST(_M, _F, _A) = Req, _} ->
             drain_cast(N-1, [Req | CastReqs])

@@ -13,5 +13,11 @@
 %% atom names saves a little bit of bandwidth.
 -define(CAST(M, F, A), {cast, M, F, A}).
 -define(ORDERED_CAST(M, F, A), {oc, M, F, A}).
+-define(ABCAST(N, M), {abcast, N, M}).
 
--define(IS_CAST(MSG), ((MSG) =:= cast orelse (MSG) =:= oc)).
+-define(IS_CAST_MSG(MSG),
+    is_tuple(MSG) andalso
+    (element(1, MSG) =:= abcast orelse
+     element(1, MSG) =:= cast orelse
+     element(1, MSG) =:= oc)
+).
