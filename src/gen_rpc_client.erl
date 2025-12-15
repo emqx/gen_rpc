@@ -26,13 +26,13 @@
 -define(NAME(NODE_OR_TUPLE), {client, NODE_OR_TUPLE}).
 
 %%% Local state
--record(state, {socket :: port(),
+-record(state, {socket :: port() | undefined,
         driver :: atom(),
         driver_mod :: atom(),
         driver_closed :: atom(),
         driver_error :: atom(),
         max_batch_size :: integer(),
-        keepalive :: tuple()}).
+        keepalive :: tuple() | undefined}).
 
 %%% Supervisor functions
 -export([start_link/1, stop/1]).
@@ -50,7 +50,7 @@
 
 %%% Behaviour callbacks
 -export([init/1, handle_call/3, handle_cast/2,
-        handle_info/2, terminate/2, code_change/3]).
+        handle_info/2, handle_continue/2, terminate/2, code_change/3]).
 
 %%% Process exports
 -export([async_call_worker/5, cast_worker/4]).
@@ -230,12 +230,15 @@ where_is(NodeOrTuple) ->
 %%% ===================================================
 %%% Behaviour callbacks
 %%% ===================================================
-%% If we're called with a key, remove it, the key is only relevant
-%% at the process name level
-init({{Node,_Key}}) ->
-    init({Node});
-
-init({Node}) ->
+init({NodeOrTuple}) ->
+    %% Set process label for OTP >= 27
+    ok = set_process_label_if_supported({?MODULE, NodeOrTuple}),
+    Node = case NodeOrTuple of
+               {Node0, _Key} when is_atom(Node0) ->
+                   Node0;
+               Node0 when is_atom(Node0) ->
+                   Node0
+           end,
     ok = gen_rpc_helper:set_optimal_process_flags(),
     case gen_rpc_helper:get_client_config_per_node(Node) of
         {error, Reason} ->
@@ -244,38 +247,44 @@ init({Node}) ->
         {Driver, Port} ->
             {DriverMod, DriverClosed, DriverError} = gen_rpc_helper:get_client_driver_options(Driver),
             ?log(info, "event=initializing_client driver=~s node=\"~s\" port=~B", [Driver, Node, Port]),
-            case gen_rpc_auth:connect_with_auth(DriverMod, Node, Port) of
-                {ok, Socket} ->
-                    Interval = application:get_env(?APP, keepalive_interval, 60), % 60s
-                    StatFun = fun() ->
-                                      case DriverMod:getstat(Socket, [recv_oct]) of
-                                          {ok, [{recv_oct, RecvOct}]} -> {ok, RecvOct};
-                                          {error, Error}              -> {error, Error}
-                                      end
-                              end,
-                    case gen_rpc_keepalive:start(StatFun, Interval, {keepalive, check}) of
-                        {ok, KeepAlive} ->
-                            MaxBatchSize = application:get_env(?APP, max_batch_size, 0),
-                            {ok, #state{socket=Socket,
-                                        driver=Driver,
-                                        driver_mod=DriverMod,
-                                        driver_closed=DriverClosed,
-                                        driver_error=DriverError,
-                                        max_batch_size=MaxBatchSize,
-                                        keepalive=KeepAlive},
-                             gen_rpc_helper:get_inactivity_timeout(?MODULE)};
-                        {error, Error} ->
-                            ?log(error, "event=start_keepalive_failed driver=~p, reason=\"~p\"", [Driver, Error]),
-                            {stop, Error}
-                    end;
-                {error, ReasonTuple} ->
-                    ?log(error, "event=client_authentication_failed driver=~s reason=\"~p\"", [Driver, ReasonTuple]),
-                    {stop, ReasonTuple};
-                {unreachable, Reason} ->
-                    %% This should be badtcp but to conform with
-                    %% the RPC library we return badrpc
-                    {stop, {badrpc, Reason}}
-            end
+            MaxBatchSize = application:get_env(?APP, max_batch_size, 0),
+            InitialState = #state{socket=undefined,
+                                  driver=Driver,
+                                  driver_mod=DriverMod,
+                                  driver_closed=DriverClosed,
+                                  driver_error=DriverError,
+                                  max_batch_size=MaxBatchSize,
+                                  keepalive=undefined},
+            %% Return immediately, connection happens in handle_continue
+            {ok, InitialState, {continue, {connect, Node, Port}}}
+    end.
+
+%% Handle async connection initialization
+handle_continue({connect, Node, Port}, #state{driver_mod = DriverMod, driver = Driver} = State) ->
+    case gen_rpc_auth:connect_with_auth(DriverMod, Node, Port) of
+        {ok, Socket} ->
+            Interval = application:get_env(?APP, keepalive_interval, 60), % 60s
+            StatFun = fun() ->
+                              case DriverMod:getstat(Socket, [recv_oct]) of
+                                  {ok, [{recv_oct, RecvOct}]} -> {ok, RecvOct};
+                                  {error, Error}              -> {error, Error}
+                              end
+                      end,
+            case gen_rpc_keepalive:start(StatFun, Interval, {keepalive, check}) of
+                {ok, KeepAlive} ->
+                    ConnectedState = State#state{socket=Socket, keepalive=KeepAlive},
+                    {noreply, ConnectedState, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
+                {error, Error} ->
+                    ?log(error, "event=start_keepalive_failed driver=~p, reason=\"~p\"", [Driver, Error]),
+                    {stop, Error, State}
+            end;
+        {error, ReasonTuple} ->
+            ?log(error, "event=client_authentication_failed driver=~s reason=\"~p\"", [Driver, ReasonTuple]),
+            {stop, ReasonTuple, State};
+        {unreachable, Reason} ->
+            %% This should be badtcp but to conform with
+            %% the RPC library we return badrpc
+            {stop, {badrpc, Reason}, State}
     end.
 
 %% This is the actual CALL handler
@@ -413,9 +422,24 @@ handle_info(Msg, #state{socket=Socket, driver=Driver} = State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
+terminate(_Reason, #state{keepalive=undefined}) ->
+    ok;
 terminate(_Reason, #state{keepalive=KeepAlive}) ->
     gen_rpc_keepalive:cancel(KeepAlive),
     ok.
+
+%%% ===================================================
+%%% Helper functions
+%%% ===================================================
+
+%% Set process label for OTP >= 27
+-if(?OTP_RELEASE >= 27).
+set_process_label_if_supported(Label) ->
+    proc_lib:set_label(Label).
+-else.
+set_process_label_if_supported(_Label) ->
+    ok.
+-endif.
 
 %%% ===================================================
 %%% Private functions
