@@ -530,47 +530,67 @@ cast_worker(NodeOrTuple, Cast, Ret, SendTimeout) ->
 async_call_worker(NodeOrTuple, M, F, A, Ref) ->
     TTL = gen_rpc_helper:get_async_call_inactivity_timeout(),
     PidName = ?NAME(NodeOrTuple),
-    SrvPid = case gen_rpc_registry:whereis_name(PidName) of
+    case gen_rpc_registry:whereis_name(PidName) of
         undefined ->
             ?log(info, "event=client_process_not_found target=\"~p\" action=spawning_client", [NodeOrTuple]),
             case gen_rpc_dispatcher:start_client(NodeOrTuple) of
                 {ok, NewPid} ->
+                    %% Monitor the client process in case it dies before handling the cast
+                    MRef = erlang:monitor(process, NewPid),
                     ok = gen_server:cast(NewPid, {{async_call,M,F,A}, self(), Ref}),
-                    NewPid;
+                    wait_for_async_reply(NewPid, MRef, Ref, TTL);
                 {error, {badrpc,_} = RpcError} ->
-                    RpcError
+                    wait_for_yield_with_error(RpcError, Ref, TTL)
             end;
         Pid ->
             ?log(debug, "event=client_process_found pid=\"~p\" target=\"~p\"", [Pid, NodeOrTuple]),
+            %% Monitor the client process in case it dies before handling the cast
+            MRef = erlang:monitor(process, Pid),
             ok = gen_server:cast(Pid, {{async_call,M,F,A}, self(), Ref}),
-            Pid
-    end,
-    case SrvPid of
-        SrvPid when is_pid(SrvPid) ->
+            wait_for_async_reply(Pid, MRef, Ref, TTL)
+    end.
+
+wait_for_async_reply(Pid, MRef, Ref, TTL) ->
+    receive
+        %% Wait for the reply from the node's gen_rpc client process
+        {Pid,Ref,async_call,Reply} ->
+            erlang:demonitor(MRef, [flush]),
+            %% Wait for a yield request from the caller
             receive
-                %% Wait for the reply from the node's gen_rpc client process
-                {SrvPid,Ref,async_call,Reply} ->
-                    %% Wait for a yield request from the caller
-                    receive
-                        {YieldPid,Ref,yield} ->
-                            YieldPid ! {self(), Ref, async_call, Reply}
-                    after
-                        TTL ->
-                            exit({error, async_call_cleanup_timeout_reached})
-                    end
+                {YieldPid,Ref,yield} ->
+                    YieldPid ! {self(), Ref, async_call, Reply}
             after
                 TTL ->
                     exit({error, async_call_cleanup_timeout_reached})
             end;
-        TRpcError ->
+        {'DOWN', MRef, process, Pid, Reason} ->
+            %% Client process died before handling the cast
+            ErrorReply = case Reason of
+                {badrpc, _} = BadRpc -> BadRpc;
+                _ -> {badrpc, Reason}
+            end,
             %% Wait for a yield request from the caller
             receive
                 {YieldPid,Ref,yield} ->
-                    YieldPid ! {self(), Ref, async_call, TRpcError}
+                    YieldPid ! {self(), Ref, async_call, ErrorReply}
             after
                 TTL ->
                     exit({error, async_call_cleanup_timeout_reached})
             end
+    after
+        TTL ->
+            erlang:demonitor(MRef, [flush]),
+            exit({error, async_call_cleanup_timeout_reached})
+    end.
+
+wait_for_yield_with_error(Error, Ref, TTL) ->
+    %% Wait for a yield request from the caller
+    receive
+        {YieldPid,Ref,yield} ->
+            YieldPid ! {self(), Ref, async_call, Error}
+    after
+        TTL ->
+            exit({error, async_call_cleanup_timeout_reached})
     end.
 
 parse_multicall_results(Keys, Nodes, undefined) ->

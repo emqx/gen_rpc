@@ -145,7 +145,20 @@ call_unreachable_peer(_Config) ->
     Result = gen_rpc:call(UnreachableNode, erlang, node, []),
     ?assertMatch({badrpc, timeout}, Result),
     %% Verify that the client process stopped properly
-    undefined = gen_rpc_client:where_is(UnreachableNode).
+    case gen_rpc_client:where_is(UnreachableNode) of
+        undefined ->
+            ok;
+        Pid ->
+            %% race condition, wait for DOWN
+            Mref = monitor(process, Pid),
+            receive
+                {'DOWN', Mref, process, Pid, _Reason} ->
+                    ok
+            after
+                5000 ->
+                    error(timeout)
+            end
+    end.
 
 call_frequent_restart_supervisor_stability(_Config) ->
     %% Test that gen_rpc_client_sup doesn't crash when handling frequent restarts
