@@ -320,6 +320,7 @@ build_old_rel(Tag, Config) ->
                   cd gen_rpc &&
                   git checkout '" ++ atom_to_list(Tag) ++ "' &&
                   sed -i 's/^\s*, {fail_if_no_peer_cert, true}/%&/' include/ssl.hrl &&
+                  sed -i 's|{snabbkaffe,.*}|{snabbkaffe, {git, \"https://github.com/kafka4beam/snabbkaffe\", {tag, \"1.0.10\"}}}|' rebar.config &&
                   env REBAR_PROFILE=default rebar3 compile &&
                   echo 'DONE'"),
     case lists:suffix("DONE\n", Ret) of
