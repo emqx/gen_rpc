@@ -543,7 +543,7 @@ async_call_worker(NodeOrTuple, M, F, A, Ref) ->
                     ok = gen_server:cast(NewPid, {{async_call,M,F,A}, self(), Ref}),
                     wait_for_async_reply(NewPid, MRef, Ref, TTL);
                 {error, {badrpc,_} = RpcError} ->
-                    wait_for_yield_with_error(RpcError, Ref, TTL)
+                    wait_for_yield_and_send(RpcError, Ref, TTL)
             end;
         Pid ->
             ?log(debug, "event=client_process_found pid=\"~p\" target=\"~p\"", [Pid, NodeOrTuple]),
@@ -558,14 +558,7 @@ wait_for_async_reply(Pid, MRef, Ref, TTL) ->
         %% Wait for the reply from the node's gen_rpc client process
         {Pid,Ref,async_call,Reply} ->
             erlang:demonitor(MRef, [flush]),
-            %% Wait for a yield request from the caller
-            receive
-                {YieldPid,Ref,yield} ->
-                    YieldPid ! {self(), Ref, async_call, Reply}
-            after
-                TTL ->
-                    exit({error, async_call_cleanup_timeout_reached})
-            end;
+            wait_for_yield_and_send(Reply, Ref, TTL);
         {'DOWN', MRef, process, Pid, Reason} ->
             %% Client process died before handling the cast
             ErrorReply = case Reason of
@@ -573,25 +566,18 @@ wait_for_async_reply(Pid, MRef, Ref, TTL) ->
                 {shutdown, ShutdownReason} -> {badrpc, ShutdownReason};
                 _ -> {badrpc, Reason}
             end,
-            %% Wait for a yield request from the caller
-            receive
-                {YieldPid,Ref,yield} ->
-                    YieldPid ! {self(), Ref, async_call, ErrorReply}
-            after
-                TTL ->
-                    exit({error, async_call_cleanup_timeout_reached})
-            end
+            wait_for_yield_and_send(ErrorReply, Ref, TTL)
     after
         TTL ->
             erlang:demonitor(MRef, [flush]),
             exit({error, async_call_cleanup_timeout_reached})
     end.
 
-wait_for_yield_with_error(Error, Ref, TTL) ->
-    %% Wait for a yield request from the caller
+wait_for_yield_and_send(Result, Ref, TTL) ->
+    %% Wait for a yield request from the caller and send the result
     receive
         {YieldPid,Ref,yield} ->
-            YieldPid ! {self(), Ref, async_call, Error}
+            YieldPid ! {self(), Ref, async_call, Result}
     after
         TTL ->
             exit({error, async_call_cleanup_timeout_reached})
