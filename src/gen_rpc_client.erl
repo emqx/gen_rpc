@@ -104,6 +104,9 @@ call(NodeOrTuple, M, F, A, RecvTimeout, SendTimeout) when ?is_node_or_tuple(Node
                 gen_server:call(Pid, {{call,M,F,A}, SendTimeout}, gen_rpc_helper:get_call_receive_timeout(RecvTimeout))
             catch
                 exit:{timeout,_Reason} -> {badrpc,timeout};
+                exit:{{badrpc, Reason}, {gen_server, call, _}} ->
+                    %% the client gen_server stopped in handle_continue
+                    {badrpc, Reason};
                 exit:OtherReason -> {badrpc, {unknown_error, OtherReason}}
             end;
         {error, Reason} ->
@@ -233,12 +236,12 @@ where_is(NodeOrTuple) ->
 init({NodeOrTuple}) ->
     %% Set process label for OTP >= 27
     ok = set_process_label_if_supported({?MODULE, NodeOrTuple}),
-    Node = case NodeOrTuple of
-               {Node0, _Key} when is_atom(Node0) ->
-                   Node0;
-               Node0 when is_atom(Node0) ->
-                   Node0
-           end,
+    {Node, Key} = case is_atom(NodeOrTuple) of
+                      true ->
+                          {NodeOrTuple, undefined};
+                      false ->
+                          NodeOrTuple
+                  end,
     ok = gen_rpc_helper:set_optimal_process_flags(),
     case gen_rpc_helper:get_client_config_per_node(Node) of
         {error, Reason} ->
@@ -256,11 +259,17 @@ init({NodeOrTuple}) ->
                                   max_batch_size=MaxBatchSize,
                                   keepalive=undefined},
             %% Return immediately, connection happens in handle_continue
-            {ok, InitialState, {continue, {connect, Node, Port}}}
+            {ok, InitialState, {continue, {connect, Node, Port, Key}}}
     end.
 
 %% Handle async connection initialization
-handle_continue({connect, Node, Port}, #state{driver_mod = DriverMod, driver = Driver} = State) ->
+handle_continue({connect, Node, Port, Key}, #state{driver_mod = DriverMod, driver = Driver} = State) ->
+    IdForLog = case Key =:= undefined of
+                   true ->
+                       io_lib:format("peer=~s://~s:~p", [Driver, Node, Port]);
+                   false ->
+                       io_lib:format("peer=~s://~s:~p, key=~p", [Driver, Node, Port, Key])
+               end,
     case gen_rpc_auth:connect_with_auth(DriverMod, Node, Port) of
         {ok, Socket} ->
             Interval = application:get_env(?APP, keepalive_interval, 60), % 60s
@@ -275,15 +284,16 @@ handle_continue({connect, Node, Port}, #state{driver_mod = DriverMod, driver = D
                     ConnectedState = State#state{socket=Socket, keepalive=KeepAlive},
                     {noreply, ConnectedState, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
                 {error, Error} ->
-                    ?log(error, "event=start_keepalive_failed driver=~p, reason=\"~p\"", [Driver, Error]),
+                    ?log(error, "event=start_keepalive_failed ~s reason=\"~0p\"", [IdForLog, Error]),
                     {stop, Error, State}
             end;
         {error, ReasonTuple} ->
-            ?log(error, "event=client_authentication_failed driver=~s reason=\"~p\"", [Driver, ReasonTuple]),
+            ?log(error, "event=client_authentication_failed ~s reason=\"~0p\"", [IdForLog, ReasonTuple]),
             {stop, ReasonTuple, State};
         {unreachable, Reason} ->
             %% This should be badtcp but to conform with
             %% the RPC library we return badrpc
+            ?log(error, "event=connect_to_remote_server, ~s, reason=\"~0p\"", [IdForLog, Reason]),
             {stop, {badrpc, Reason}, State}
     end.
 

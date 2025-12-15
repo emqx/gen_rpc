@@ -129,6 +129,15 @@ cast_inexistent_node(_Config) ->
 ord_cast_inexistent_node(_Config) ->
     true = gen_rpc:ordered_cast({?FAKE_NODE, 1}, os, timestamp, []).
 
+call_unreachable_peer(_Config) ->
+    %% Test that call to unreachable peer returns {badrpc, Reason} instead of exiting
+    %% when client stops in handle_continue due to connection timeout
+    UnreachableNode = 'unreachable@192.0.2.1',  %% 192.0.2.1 is TEST-NET-1 (RFC 5737), should be unreachable
+    Result = gen_rpc:call(UnreachableNode, erlang, node, []),
+    ?assertMatch({badrpc, timeout}, Result),
+    %% Verify that the client process stopped properly
+    undefined = gen_rpc_client:where_is(UnreachableNode).
+
 call_node(_Config) ->
     ?SLAVE = gen_rpc:call(?SLAVE, erlang, node, []).
 
