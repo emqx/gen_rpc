@@ -56,10 +56,8 @@ connect(Node, Port) when is_atom(Node) ->
                  [Node, Port, gen_rpc_helper:socket_to_string(Socket)]),
             {ok, Socket};
         {error, Reason} ->
-            ?log(error, "event=connect_to_remote_server peer=~s, port=~p, reason=~0p", [Node, Port, Reason]),
             {error, {badtcp,Reason}}
     end.
-
 
 -spec listen(inet:port_number()) -> {ok, ssl:sslsocket()} | {error, term()}.
 listen(Port) when is_integer(Port) ->

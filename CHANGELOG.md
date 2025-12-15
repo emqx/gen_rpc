@@ -2,6 +2,25 @@
 
 Below is a non-exhaustive list of changes between `gen_rpc` versions.
 
+## 3.4.4
+
+- Refactor client initialization to use async connection setup via `handle_continue/2`, preventing dispatcher blocking during client startup
+- Fix supervisor crash reports by using `{shutdown, Reason}` for graceful client termination instead of abnormal reasons
+- Improve error handling and logging for connection failures
+
+## 3.4.3
+
+- Performance: Use lazy tracepoints in hot code paths to reduce overhead
+
+## 3.4.2
+
+- Chore: Reduce debug level logging
+- CI: Update GitHub action versions
+
+## 3.4.1
+
+- Fix: Don't crash the server due to client problems
+
 ## 3.4.0
 
 - Back-pressure towards sender by `{active, 100}` socket option in acceptor side.

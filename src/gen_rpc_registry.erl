@@ -42,12 +42,14 @@ start_link() ->
 -spec nodes() -> [node()].
 nodes() ->
     ThisNode = node(),
-    lists:usort(
-      ets:select(?TAB,
-                 ets:fun2ms(fun({{client, {Node, _}}, _}) when Node =/= ThisNode -> Node;
-                               ({{client, Node}, _})      when Node =/= ThisNode -> Node
-                            end))).
-
+    %% Select all client entries with their Pids, then filter by process liveness
+    AllEntries = ets:select(?TAB,
+                            ets:fun2ms(fun({{client, {Node, _}}, Pid}) when Node =/= ThisNode -> {Node, Pid};
+                                          ({{client, Node}, Pid})      when Node =/= ThisNode -> {Node, Pid}
+                                       end)),
+    %% Filter out entries where the process is not alive
+    AliveNodes = [Node || {Node, Pid} <- AllEntries, is_process_alive(Pid)],
+    lists:usort(AliveNodes).
 
 -spec all_processes(_Tag) -> [{_Key, pid()}].
 all_processes(Tag) ->

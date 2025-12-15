@@ -26,13 +26,13 @@
 -define(NAME(NODE_OR_TUPLE), {client, NODE_OR_TUPLE}).
 
 %%% Local state
--record(state, {socket :: port(),
+-record(state, {socket :: port() | undefined,
         driver :: atom(),
         driver_mod :: atom(),
         driver_closed :: atom(),
         driver_error :: atom(),
         max_batch_size :: integer(),
-        keepalive :: tuple()}).
+        keepalive :: tuple() | undefined}).
 
 %%% Supervisor functions
 -export([start_link/1, stop/1]).
@@ -50,7 +50,7 @@
 
 %%% Behaviour callbacks
 -export([init/1, handle_call/3, handle_cast/2,
-        handle_info/2, terminate/2, code_change/3]).
+        handle_info/2, handle_continue/2, terminate/2, code_change/3]).
 
 %%% Process exports
 -export([async_call_worker/5, cast_worker/4]).
@@ -104,6 +104,12 @@ call(NodeOrTuple, M, F, A, RecvTimeout, SendTimeout) when ?is_node_or_tuple(Node
                 gen_server:call(Pid, {{call,M,F,A}, SendTimeout}, gen_rpc_helper:get_call_receive_timeout(RecvTimeout))
             catch
                 exit:{timeout,_Reason} -> {badrpc,timeout};
+                exit:{{shutdown, {badrpc, Reason}}, {gen_server, call, _}} ->
+                    %% the client gen_server stopped in handle_continue
+                    {badrpc, Reason};
+                exit:{{shutdown, Reason}, {gen_server, call, _}} ->
+                    %% the client gen_server stopped with shutdown reason (non-badrpc)
+                    {badrpc, Reason};
                 exit:OtherReason -> {badrpc, {unknown_error, OtherReason}}
             end;
         {error, Reason} ->
@@ -230,12 +236,15 @@ where_is(NodeOrTuple) ->
 %%% ===================================================
 %%% Behaviour callbacks
 %%% ===================================================
-%% If we're called with a key, remove it, the key is only relevant
-%% at the process name level
-init({{Node,_Key}}) ->
-    init({Node});
-
-init({Node}) ->
+init({NodeOrTuple}) ->
+    %% Set process label for OTP >= 27
+    ok = set_process_label_if_supported({?MODULE, NodeOrTuple}),
+    {Node, Key} = case is_atom(NodeOrTuple) of
+                      true ->
+                          {NodeOrTuple, undefined};
+                      false ->
+                          NodeOrTuple
+                  end,
     ok = gen_rpc_helper:set_optimal_process_flags(),
     case gen_rpc_helper:get_client_config_per_node(Node) of
         {error, Reason} ->
@@ -244,38 +253,51 @@ init({Node}) ->
         {Driver, Port} ->
             {DriverMod, DriverClosed, DriverError} = gen_rpc_helper:get_client_driver_options(Driver),
             ?log(info, "event=initializing_client driver=~s node=\"~s\" port=~B", [Driver, Node, Port]),
-            case gen_rpc_auth:connect_with_auth(DriverMod, Node, Port) of
-                {ok, Socket} ->
-                    Interval = application:get_env(?APP, keepalive_interval, 60), % 60s
-                    StatFun = fun() ->
-                                      case DriverMod:getstat(Socket, [recv_oct]) of
-                                          {ok, [{recv_oct, RecvOct}]} -> {ok, RecvOct};
-                                          {error, Error}              -> {error, Error}
-                                      end
-                              end,
-                    case gen_rpc_keepalive:start(StatFun, Interval, {keepalive, check}) of
-                        {ok, KeepAlive} ->
-                            MaxBatchSize = application:get_env(?APP, max_batch_size, 0),
-                            {ok, #state{socket=Socket,
-                                        driver=Driver,
-                                        driver_mod=DriverMod,
-                                        driver_closed=DriverClosed,
-                                        driver_error=DriverError,
-                                        max_batch_size=MaxBatchSize,
-                                        keepalive=KeepAlive},
-                             gen_rpc_helper:get_inactivity_timeout(?MODULE)};
-                        {error, Error} ->
-                            ?log(error, "event=start_keepalive_failed driver=~p, reason=\"~p\"", [Driver, Error]),
-                            {stop, Error}
-                    end;
-                {error, ReasonTuple} ->
-                    ?log(error, "event=client_authentication_failed driver=~s reason=\"~p\"", [Driver, ReasonTuple]),
-                    {stop, ReasonTuple};
-                {unreachable, Reason} ->
-                    %% This should be badtcp but to conform with
-                    %% the RPC library we return badrpc
-                    {stop, {badrpc, Reason}}
-            end
+            MaxBatchSize = application:get_env(?APP, max_batch_size, 0),
+            InitialState = #state{socket=undefined,
+                                  driver=Driver,
+                                  driver_mod=DriverMod,
+                                  driver_closed=DriverClosed,
+                                  driver_error=DriverError,
+                                  max_batch_size=MaxBatchSize,
+                                  keepalive=undefined},
+            %% Return immediately, connection happens in handle_continue
+            {ok, InitialState, {continue, {connect, Node, Port, Key}}}
+    end.
+
+%% Handle async connection initialization
+handle_continue({connect, Node, Port, Key}, #state{driver_mod = DriverMod, driver = Driver} = State) ->
+    IdForLog = case Key =:= undefined of
+                   true ->
+                       io_lib:format("peer=~s://~s:~p", [Driver, Node, Port]);
+                   false ->
+                       io_lib:format("peer=~s://~s:~p, key=~p", [Driver, Node, Port, Key])
+               end,
+    case gen_rpc_auth:connect_with_auth(DriverMod, Node, Port) of
+        {ok, Socket} ->
+            Interval = application:get_env(?APP, keepalive_interval, 60), % 60s
+            StatFun = fun() ->
+                              case DriverMod:getstat(Socket, [recv_oct]) of
+                                  {ok, [{recv_oct, RecvOct}]} -> {ok, RecvOct};
+                                  {error, Error}              -> {error, Error}
+                              end
+                      end,
+            case gen_rpc_keepalive:start(StatFun, Interval, {keepalive, check}) of
+                {ok, KeepAlive} ->
+                    ConnectedState = State#state{socket=Socket, keepalive=KeepAlive},
+                    {noreply, ConnectedState, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
+                {error, Error} ->
+                    ?log(error, "event=start_keepalive_failed ~s reason=\"~0p\"", [IdForLog, Error]),
+                    {stop, {shutdown, Error}, State}
+            end;
+        {error, ReasonTuple} ->
+            ?log(error, "event=client_authentication_failed ~s reason=\"~0p\"", [IdForLog, ReasonTuple]),
+            {stop, {shutdown, ReasonTuple}, State};
+        {unreachable, Reason} ->
+            %% This should be badtcp but to conform with
+            %% the RPC library we return badrpc
+            ?log(error, "event=connect_to_remote_server, ~s, reason=\"~0p\"", [IdForLog, Reason]),
+            {stop, {shutdown, {badrpc, Reason}}, State}
     end.
 
 %% This is the actual CALL handler
@@ -288,7 +310,7 @@ handle_call({{call,_M,_F,_A} = PacketTuple, SendTimeout}, Caller, #state{socket=
         {error, Reason} ->
             ?log(error, "message=call event=transmission_failed driver=~s socket=\"~s\" caller=\"~p\" reason=\"~p\"",
                  [Driver, gen_rpc_helper:socket_to_string(Socket), Caller, Reason]),
-            {stop, Reason, Reason, State};
+            {stop, {shutdown, Reason}, Reason, State};
         ok ->
             ?log(debug, "message=call event=transmission_succeeded driver=~s socket=\"~s\" caller=\"~p\"",
                  [Driver, gen_rpc_helper:socket_to_string(Socket), Caller]),
@@ -313,7 +335,7 @@ handle_cast({{async_call,_M,_F,_A} = PacketTuple, Caller, Ref}, #state{socket=So
         {error, Reason} ->
             ?log(error, "message=async_call event=transmission_failed driver=~s socket=\"~s\" worker_pid=\"~p\" call_ref=\"~p\" reason=\"~p\"",
                  [Driver, gen_rpc_helper:socket_to_string(Socket), Caller, Ref, Reason]),
-            {stop, Reason, Reason, State};
+            {stop, {shutdown, Reason}, Reason, State};
         ok ->
             ?log(debug, "message=async_call event=transmission_succeeded driver=~s socket=\"~s\" worker_pid=\"~p\" call_ref=\"~p\"",
                  [Driver, gen_rpc_helper:socket_to_string(Socket), Caller, Ref]),
@@ -394,7 +416,7 @@ handle_info({keepalive, check}, #state{driver=Driver, keepalive=KeepAlive} = Sta
         {error, Reason} ->
             ?log(error, "event=keepalive_check_failed driver=~p, reason=\"~p\" action=stopping",
                 [Driver, Reason]),
-            {stop, Reason, State}
+            {stop, {shutdown, Reason}, State}
     end;
 
 handle_info({inet_reply, _Socket, ok}, State) ->
@@ -413,9 +435,24 @@ handle_info(Msg, #state{socket=Socket, driver=Driver} = State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
+terminate(_Reason, #state{keepalive=undefined}) ->
+    ok;
 terminate(_Reason, #state{keepalive=KeepAlive}) ->
     gen_rpc_keepalive:cancel(KeepAlive),
     ok.
+
+%%% ===================================================
+%%% Helper functions
+%%% ===================================================
+
+%% Set process label for OTP >= 27
+-if(?OTP_RELEASE >= 27).
+set_process_label_if_supported(Label) ->
+    proc_lib:set_label(Label).
+-else.
+set_process_label_if_supported(_Label) ->
+    ok.
+-endif.
 
 %%% ===================================================
 %%% Private functions
@@ -437,7 +474,7 @@ send_cast(PacketTuple, #state{socket=Socket, driver=Driver, driver_mod=DriverMod
                                        , driver => Driver
                                        , reason => Reason
                                        }),
-            {stop, Reason, State};
+            {stop, {shutdown, Reason}, State};
         ok ->
             ok = case Activate of
                      true -> DriverMod:activate_socket(Socket);
@@ -455,7 +492,7 @@ send_ping(#state{socket=Socket, driver=Driver, driver_mod=DriverMod} = State) ->
         {error, Reason} ->
             ?log(error, "message=ping event=transmission_failed driver=~s socket=\"~s\" reason=\"~p\"",
                  [Driver, gen_rpc_helper:socket_to_string(Socket), Reason]),
-            {stop, Reason, State};
+            {stop, {shutdown, Reason}, State};
         ok ->
             ?log(debug, "message=ping event=transmission_succeeded driver=~s socket=\"~s\"",
                  [Driver, gen_rpc_helper:socket_to_string(Socket)]),
@@ -496,47 +533,54 @@ cast_worker(NodeOrTuple, Cast, Ret, SendTimeout) ->
 async_call_worker(NodeOrTuple, M, F, A, Ref) ->
     TTL = gen_rpc_helper:get_async_call_inactivity_timeout(),
     PidName = ?NAME(NodeOrTuple),
-    SrvPid = case gen_rpc_registry:whereis_name(PidName) of
+    case gen_rpc_registry:whereis_name(PidName) of
         undefined ->
             ?log(info, "event=client_process_not_found target=\"~p\" action=spawning_client", [NodeOrTuple]),
             case gen_rpc_dispatcher:start_client(NodeOrTuple) of
                 {ok, NewPid} ->
+                    %% Monitor the client process in case it dies before handling the cast
+                    MRef = erlang:monitor(process, NewPid),
                     ok = gen_server:cast(NewPid, {{async_call,M,F,A}, self(), Ref}),
-                    NewPid;
+                    wait_for_async_reply(NewPid, MRef, Ref, TTL);
                 {error, {badrpc,_} = RpcError} ->
-                    RpcError
+                    wait_for_yield_and_send(RpcError, Ref, TTL)
             end;
         Pid ->
             ?log(debug, "event=client_process_found pid=\"~p\" target=\"~p\"", [Pid, NodeOrTuple]),
+            %% Monitor the client process in case it dies before handling the cast
+            MRef = erlang:monitor(process, Pid),
             ok = gen_server:cast(Pid, {{async_call,M,F,A}, self(), Ref}),
-            Pid
-    end,
-    case SrvPid of
-        SrvPid when is_pid(SrvPid) ->
-            receive
-                %% Wait for the reply from the node's gen_rpc client process
-                {SrvPid,Ref,async_call,Reply} ->
-                    %% Wait for a yield request from the caller
-                    receive
-                        {YieldPid,Ref,yield} ->
-                            YieldPid ! {self(), Ref, async_call, Reply}
-                    after
-                        TTL ->
-                            exit({error, async_call_cleanup_timeout_reached})
-                    end
-            after
-                TTL ->
-                    exit({error, async_call_cleanup_timeout_reached})
-            end;
-        TRpcError ->
-            %% Wait for a yield request from the caller
-            receive
-                {YieldPid,Ref,yield} ->
-                    YieldPid ! {self(), Ref, async_call, TRpcError}
-            after
-                TTL ->
-                    exit({error, async_call_cleanup_timeout_reached})
-            end
+            wait_for_async_reply(Pid, MRef, Ref, TTL)
+    end.
+
+wait_for_async_reply(Pid, MRef, Ref, TTL) ->
+    receive
+        %% Wait for the reply from the node's gen_rpc client process
+        {Pid,Ref,async_call,Reply} ->
+            erlang:demonitor(MRef, [flush]),
+            wait_for_yield_and_send(Reply, Ref, TTL);
+        {'DOWN', MRef, process, Pid, Reason} ->
+            %% Client process died before handling the cast
+            ErrorReply = case Reason of
+                {shutdown, {badrpc, _} = BadRpc} -> BadRpc;
+                {shutdown, ShutdownReason} -> {badrpc, ShutdownReason};
+                _ -> {badrpc, Reason}
+            end,
+            wait_for_yield_and_send(ErrorReply, Ref, TTL)
+    after
+        TTL ->
+            erlang:demonitor(MRef, [flush]),
+            exit({error, async_call_cleanup_timeout_reached})
+    end.
+
+wait_for_yield_and_send(Result, Ref, TTL) ->
+    %% Wait for a yield request from the caller and send the result
+    receive
+        {YieldPid,Ref,yield} ->
+            YieldPid ! {self(), Ref, async_call, Result}
+    after
+        TTL ->
+            exit({error, async_call_cleanup_timeout_reached})
     end.
 
 parse_multicall_results(Keys, Nodes, undefined) ->

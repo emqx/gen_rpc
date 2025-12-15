@@ -55,6 +55,15 @@ init_per_testcase(external_client_config_source, Config) ->
     %% upon every application restart
     ok = application:set_env(?APP, client_config_per_node, {external, ?MODULE}),
     [{prev_env, PrevEnv}|Config];
+init_per_testcase(call_frequent_restart_supervisor_stability, Config) ->
+    %% This test creates its own dummy node, doesn't need slave
+    ct:print("Running ~p", [call_frequent_restart_supervisor_stability]),
+    PrevEnv = application:get_all_env(?APP),
+    ok = gen_rpc_test_helper:restart_application(),
+    Driver = gen_rpc_test_helper:get_driver_from_config(Config),
+    ok = gen_rpc_test_helper:start_master(Driver),
+    %% Save environment variables, so they can be restored later:
+    [{prev_env, PrevEnv}|Config];
 init_per_testcase(Testcase, Config) ->
     ct:print("Running ~p", [Testcase]),
     PrevEnv = application:get_all_env(?APP),
@@ -128,6 +137,89 @@ cast_inexistent_node(_Config) ->
 
 ord_cast_inexistent_node(_Config) ->
     true = gen_rpc:ordered_cast({?FAKE_NODE, 1}, os, timestamp, []).
+
+call_unreachable_peer(_Config) ->
+    %% Test that call to unreachable peer returns {badrpc, Reason} instead of exiting
+    %% when client stops in handle_continue due to connection timeout
+    UnreachableNode = 'unreachable@192.0.2.1',  %% 192.0.2.1 is TEST-NET-1 (RFC 5737), should be unreachable
+    Result = gen_rpc:call(UnreachableNode, erlang, node, []),
+    ?assertMatch({badrpc, timeout}, Result),
+    %% Verify that the client process stopped properly
+    case gen_rpc_client:where_is(UnreachableNode) of
+        undefined ->
+            ok;
+        Pid ->
+            %% race condition, wait for DOWN
+            Mref = monitor(process, Pid),
+            receive
+                {'DOWN', Mref, process, Pid, _Reason} ->
+                    ?assertEqual(undefined, gen_rpc_client:where_is(UnreachableNode)),
+                    ok
+            after
+                5000 ->
+                    error(timeout)
+            end
+    end.
+
+call_frequent_restart_supervisor_stability(_Config) ->
+    %% Test that gen_rpc_client_sup doesn't crash when handling frequent restarts
+    %% caused by connection errors (e.g., econnrefused) that don't delay
+    Driver = gen_rpc_test_helper:get_driver_from_config(_Config),
+    %% Use a dummy node name that resolves to 127.0.0.1 but configure it to connect
+    %% to a port that's not listening (causes immediate econnrefused)
+    DummyNode = 'dummy_node@127.0.0.1',
+    DummyPort = 9999,
+    ok = application:set_env(?APP, client_config_per_node, {internal, #{
+        DummyNode => {Driver, DummyPort}
+    }}, [{persistent, true}]),
+
+    %% Monitor gen_rpc_client_sup to ensure it doesn't crash
+    ClientSupPid = erlang:whereis(gen_rpc_client_sup),
+    ClientSupRef = erlang:monitor(process, ClientSupPid),
+
+    %% Spawn 1000 concurrent processes, each with a unique key
+    NumProcesses = 1000,
+    Pids = [begin
+        Pid = erlang:spawn(fun() ->
+            Key = I,
+            Result = gen_rpc:call({DummyNode, Key}, erlang, node, []),
+            %% All should fail with badrpc
+            case Result of
+                {badrpc, _Reason} -> ok;
+                _ -> exit({unexpected_result, Result})
+            end
+        end),
+        Ref = erlang:monitor(process, Pid),
+        {Pid, Ref}
+    end || I <- lists:seq(1, NumProcesses)],
+
+    %% Wait for all processes to complete
+    lists:foreach(fun({Pid, Ref}) ->
+        receive
+            {'DOWN', Ref, process, Pid, Reason} ->
+                case Reason of
+                    normal -> ok;
+                    {unexpected_result, R} -> exit({unexpected_result, R});
+                    _ -> exit({process_crashed, Reason})
+                end
+        after
+            30000 -> exit(timeout_waiting_for_process)
+        end
+    end, Pids),
+
+    %% Verify gen_rpc_client_sup is still alive
+    receive
+        {'DOWN', ClientSupRef, process, _, Reason} ->
+            exit({gen_rpc_client_sup_crashed, Reason})
+    after
+        0 ->
+            %% Supervisor is still alive, verify it's the same process
+            CurrentSupPid = erlang:whereis(gen_rpc_client_sup),
+            ?assertEqual(ClientSupPid, CurrentSupPid),
+            erlang:demonitor(ClientSupRef, [flush])
+    end,
+
+    ok.
 
 call_node(_Config) ->
     ?SLAVE = gen_rpc:call(?SLAVE, erlang, node, []).
