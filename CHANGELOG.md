@@ -7,6 +7,7 @@ Below is a non-exhaustive list of changes between `gen_rpc` versions.
 - Refactor client initialization to use async connection setup via `handle_continue/2`, preventing dispatcher blocking during client startup
 - Fix supervisor crash reports by using `{shutdown, Reason}` for graceful client termination instead of abnormal reasons
 - Improve error handling and logging for connection failures
+- Throttle error logs when connection to server fails
 
 ## 3.4.3
 

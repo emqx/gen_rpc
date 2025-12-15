@@ -27,6 +27,8 @@ start_link() ->
 %%% Supervisor callbacks
 %%% ===================================================
 init([]) ->
+    %% Create ETS table for log throttling (owned by supervisor process)
+    _ = ets:new(gen_rpc_log_throttle, [named_table, public, set, {write_concurrency, true}]),
     {ok, {{one_for_one, 100, 1}, [
         {gen_rpc_registry, {gen_rpc_registry, start_link, []}, permanent, 5000, worker, [gen_rpc_registry]},
         {gen_rpc_server_tcp, {gen_rpc_server,start_link,[tcp]}, permanent, 5000, worker, [gen_rpc_server]},

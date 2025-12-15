@@ -267,12 +267,11 @@ init({NodeOrTuple}) ->
 
 %% Handle async connection initialization
 handle_continue({connect, Node, Port, Key}, #state{driver_mod = DriverMod, driver = Driver} = State) ->
-    IdForLog = case Key =:= undefined of
-                   true ->
-                       io_lib:format("peer=~s://~s:~p", [Driver, Node, Port]);
-                   false ->
-                       io_lib:format("peer=~s://~s:~p, key=~p", [Driver, Node, Port, Key])
-               end,
+    IdForLog =
+        case Key =:= undefined of
+            true -> binfmt("~s://~s:~p", [Driver, Node, Port]);
+            false -> binfmt("~s://~s:~p, key=~p", [Driver, Node, Port, Key])
+        end,
     case gen_rpc_auth:connect_with_auth(DriverMod, Node, Port) of
         {ok, Socket} ->
             Interval = application:get_env(?APP, keepalive_interval, 60), % 60s
@@ -287,16 +286,19 @@ handle_continue({connect, Node, Port, Key}, #state{driver_mod = DriverMod, drive
                     ConnectedState = State#state{socket=Socket, keepalive=KeepAlive},
                     {noreply, ConnectedState, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
                 {error, Error} ->
-                    ?log(error, "event=start_keepalive_failed ~s reason=\"~0p\"", [IdForLog, Error]),
+                    log_error_throttled({keepalive_failed, IdForLog},
+                                        {"rpc_client_failed_to_init ~s, reason=\"~0p\"", [IdForLog, Error]}),
                     {stop, {shutdown, Error}, State}
             end;
         {error, ReasonTuple} ->
-            ?log(error, "event=client_authentication_failed ~s reason=\"~0p\"", [IdForLog, ReasonTuple]),
+            log_error_throttled({auth_failed, IdForLog},
+                                {"rpc_client_authentication_failed ~s, reason=\"~0p\"", [IdForLog, ReasonTuple]}),
             {stop, {shutdown, ReasonTuple}, State};
         {unreachable, Reason} ->
             %% This should be badtcp but to conform with
             %% the RPC library we return badrpc
-            ?log(error, "event=connect_to_remote_server, ~s, reason=\"~0p\"", [IdForLog, Reason]),
+            log_error_throttled({connect_failed, IdForLog},
+                                {"rpc_client_failed_to_connect_server ~s, reason=\"~0p\"", [IdForLog, Reason]}),
             {stop, {shutdown, {badrpc, Reason}}, State}
     end.
 
@@ -444,6 +446,27 @@ terminate(_Reason, #state{keepalive=KeepAlive}) ->
 %%% ===================================================
 %%% Helper functions
 %%% ===================================================
+
+%% Throttled error logging - prevents same error from being logged
+%% more than once per 5 seconds (across process restarts)
+%% The ETS table is owned by gen_rpc_sup supervisor
+-spec log_error_throttled(term(), {string(), list()}) -> ok.
+log_error_throttled(EventKey, FormatArgs) ->
+    Now = erlang:system_time(second),
+    case ets:lookup(gen_rpc_log_throttle, EventKey) of
+        [] ->
+            ets:insert(gen_rpc_log_throttle, {EventKey, Now}),
+            apply_log(FormatArgs);
+        [{EventKey, LastTime}] when Now - LastTime >= 5 ->
+            ets:update_element(gen_rpc_log_throttle, EventKey, {2, Now}),
+            apply_log(FormatArgs);
+        _ ->
+            %% Skip logging, throttled
+            ok
+    end.
+
+apply_log({Format, Args}) ->
+    ?log(error, Format, Args).
 
 %% Set process label for OTP >= 27
 -if(?OTP_RELEASE >= 27).
@@ -665,3 +688,6 @@ local_call(M, F, A, Timeout) ->
             erlang:demonitor(MRef, [flush]),
             {badrpc, timeout}
     end.
+
+binfmt(Fmt, Args) ->
+    iolist_to_binary(io_lib:format(Fmt, Args)).
