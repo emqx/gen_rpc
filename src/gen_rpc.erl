@@ -105,11 +105,11 @@ eval_everywhere(Nodes, M, F, A, SendTimeout) ->
 yield(Key) ->
     gen_rpc_client:yield(Key).
 
--spec nb_yield(tuple()) -> {value, term()} | {badrpc, term()}.
+-spec nb_yield(tuple()) -> {value, term()} | {badrpc, term()} | timeout.
 nb_yield(Key) ->
     gen_rpc_client:nb_yield(Key).
 
--spec nb_yield(tuple(), timeout()) -> {value, term()} | {badrpc, term()}.
+-spec nb_yield(tuple(), timeout()) -> {value, term()} | {badrpc, term()} | timeout.
 nb_yield(Key, Timeout) ->
     gen_rpc_client:nb_yield(Key, Timeout).
 
