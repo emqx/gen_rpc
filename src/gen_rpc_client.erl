@@ -175,12 +175,12 @@ yield(Key) ->
     Result.
 
 %% Simple server non-blocking yield with key, default timeout value of 0
--spec nb_yield(tuple()) -> {value,term()} | {badrpc,term()}.
+-spec nb_yield(tuple()) -> {value,term() | {badrpc,term()}} | timeout.
 nb_yield(Key)->
     nb_yield(Key, 0).
 
 %% Simple server non-blocking yield with key and custom timeout value
--spec nb_yield(tuple(), timeout()) -> {value,term()} | {badrpc,term()}.
+-spec nb_yield(tuple(), timeout()) -> {value,term() | {badrpc,term()}} | timeout.
 nb_yield({Pid,Ref}, Timeout) when is_pid(Pid), is_reference(Ref), ?is_timeout(Timeout) ->
     Pid ! {self(), Ref, yield},
     receive
