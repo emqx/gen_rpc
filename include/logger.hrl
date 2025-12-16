@@ -1,4 +1,4 @@
-%% Copyright (c) 2013-2019 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2013-2025 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -12,37 +12,24 @@
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
 
-%% debug | info | notice | warning | error | critical | alert | emergency
+-ifndef(GEN_RPC_LOGGER).
+-define(GEN_RPC_LOGGER, true).
 
--define(debug(Format), ?log(debug, Format, [])).
--define(debug(Format, Args), ?log(debug, Format, Args)).
+-define(T_ACCEPTOR, acceptor).
+-define(T_DISPATCHER, dispatcher).
+-define(T_AUTH, auth).
+-define(T_SERVER, server).
+-define(T_DRIVER, driver).
+-define(T_CLIENT, client).
+%% Domains
+-define(D_CLIENT, [gen_rpc, ?T_CLIENT]).
+-define(D_AUTH, [gen_rpc, ?T_CLIENT]).
+-define(D_ACCEPTOR, [gen_rpc, ?T_ACCEPTOR]).
+-define(D_DISPATCHER, [gen_rpc, ?T_DISPATCHER]).
+-define(D_DRIVER, [gen_rpc, ?T_DRIVER]).
+-define(D_SERVER, [gen_rpc, ?T_SERVER]).
 
--define(info(Format), ?log(info, Format, [])).
--define(info(Format, Args), ?log(info, Format, Args)).
+-define(LOG(Level, Type, Msg, Data),
+        gen_rpc_logger:log(Level, Type, Msg, fun() -> Data end)).
 
--define(notice(Format), ?log(notice, Format, [])).
--define(notice(Format, Args), ?log(notice, Format, Args)).
-
--define(warn(Format), ?log(warning, Format, [])).
--define(warn(Format, Args), ?log(warning, Format, Args)).
-
--define(error(Format), ?log(error, Format, [])).
--define(error(Format, Args), ?log(error, Format, Args)).
-
--define(critical(Format), ?log(critical, Format, [])).
--define(critical(Format, Args), ?log(critical, Format, Args)).
-
--define(alert(Format), ?log(alert, Format, [])).
--define(alert(Format, Args), ?log(alert, Format, Args)).
-
--define(log(Level, Format), ?log(Level, Format, [])).
-
--define(log(Level, Format, Args),
-        begin
-          (logger:log(Level,fun(_) -> {(Format), (Args)} end,[]))
-        end).
-
--define(slog(Level, Report),
-        begin
-          (logger:log(Level,fun(_) -> Report end, []))
-        end).
+-endif.

@@ -1,6 +1,7 @@
 %%% -*-mode:erlang;coding:utf-8;tab-width:4;c-basic-offset:4;indent-tabs-mode:()-*-
 %%% ex: set ft=erlang fenc=utf-8 sts=4 ts=4 sw=4 et:
 %%%
+%%% Copyright (c) 2018-2025 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%% Copyright 2015 Panagiotis Papadomitsos. All Rights Reserved.
 %%%
 %%% Dispatcher is a serialization trick to prevent starting up
@@ -19,6 +20,8 @@
 -include("guards.hrl").
 %%% Include helpful guard macros
 -include("types.hrl").
+
+-define(log(Level, Msg, Data), ?LOG(Level, ?T_DISPATCHER, Msg, Data)).
 
 %%% Supervisor functions
 -export([start_link/0, stop/0]).
@@ -49,7 +52,7 @@ start_client(NodeOrTuple) when ?is_node_or_tuple(NodeOrTuple) ->
 %%% Behaviour callbacks
 %%% ===================================================
 init([]) ->
-    ?tp(info, gen_rpc_dispatcher_start, #{}),
+    ?tp(info, gen_rpc_dispatcher_start, #{domain => ?D_DISPATCHER}),
     {ok, undefined}.
 
 %% Simply launch a connection to a node through the appropriate
@@ -58,27 +61,27 @@ handle_call({start_client, NodeOrTuple}, _Caller, undefined) ->
     PidName = {client, NodeOrTuple},
     Reply = case gen_rpc_registry:whereis_name(PidName) of
         undefined ->
-            ?tp(debug, gen_rpc_start_client, #{target => NodeOrTuple}),
+            ?tp(debug, gen_rpc_start_client, #{target => NodeOrTuple, domain => ?D_DISPATCHER}),
             gen_rpc_client_sup:start_child(NodeOrTuple);
         Pid ->
-            ?tp(debug, gen_rpc_client_already_stated, #{target => NodeOrTuple}),
+            ?tp(debug, gen_rpc_client_already_stated, #{target => NodeOrTuple, domain => ?D_DISPATCHER}),
             {ok, Pid}
     end,
     {reply, Reply, undefined};
 
 %% Catch-all for calls - die if we get a message we don't expect
 handle_call(Msg, _Caller, undefined) ->
-    ?log(error, "event=uknown_call_received message=\"~p\" action=stopping", [Msg]),
+    ?log(error, "unknown_call_received", #{message => Msg, action => stopping}),
     {stop, {unknown_call, Msg}, undefined}.
 
 %% Catch-all for casts - die if we get a message we don't expect
 handle_cast(Msg, undefined) ->
-    ?log(error, "event=uknown_cast_received message=\"~p\" action=stopping", [Msg]),
+    ?log(error, "unknown_cast_received", #{message => Msg, action => stopping}),
     {stop, {unknown_cast, Msg}, undefined}.
 
 %% Catch-all for info - our protocol is strict so die!
 handle_info(Msg, undefined) ->
-    ?log(error, "event=uknown_message_received message=\"~p\" action=stopping", [Msg]),
+    ?log(error, "unknown_message_received", #{message => Msg, action => stopping}),
     {stop, {unknown_info, Msg}, undefined}.
 
 code_change(_OldVersion, undefined, _Extra) ->

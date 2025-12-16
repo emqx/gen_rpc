@@ -1,7 +1,7 @@
 %%% -*-mode:erlang;coding:utf-8;tab-width:4;c-basic-offset:4;indent-tabs-mode:()-*-
 %%% ex: set ft=erlang fenc=utf-8 sts=4 ts=4 sw=4 et:
 %%%
-%%% Copyright 2024 EMQ Technologies Co, Ltd. All Rights Reserved.
+%%% Copyright (c) 2024-2025 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%% Copyright 2015 Panagiotis Papadomitsos. All Rights Reserved.
 %%%
 %%% Original concept inspired and some code copied from
@@ -17,6 +17,8 @@
 -include("logger.hrl").
 %%% Include this library's name macro
 -include("app.hrl").
+
+-define(log(Level, Msg, Data), ?LOG(Level, ?T_SERVER, Msg, Data)).
 
 %%% Local state
 %%% Local state
@@ -57,10 +59,16 @@ init({Driver}) ->
     case DriverMod:listen(DriverPort) of
         {ok, Socket} ->
             %% Launch a new acceptor with a new accept socket
-            ?log(info, "event=server_setup_successfully driver=~s port=~p socket=\"~s\"", [Driver, DriverPort, gen_rpc_helper:socket_to_string(Socket)]),
+            ?log(info, "server_setup_successfully",
+                 #{driver => Driver,
+                   port => DriverPort,
+                   socket => gen_rpc_helper:socket_to_string(Socket)}),
             {ok, waiting_for_connection, #state{socket=Socket, driver=Driver, driver_mod=DriverMod}, {next_event,internal,accept}};
         {error, Reason} ->
-            ?log(error, "event=failed_to_setup_server driver=~s port=~p reason=\"~p\"", [Driver, DriverPort, Reason]),
+            ?log(error, "failed_to_setup_server",
+                 #{driver => Driver,
+                   port => DriverPort,
+                   cause => Reason}),
             {stop, Reason}
     end.
 
@@ -74,8 +82,6 @@ waiting_for_connection(internal, accept, #state{socket=ListSock, driver=Driver, 
             %% crash due to client misbehavior. So we wrap everything
             %% in try/catch.
             try
-                ?log(info, "event=client_connection_received driver=~s socket=\"~s\" action=starting_acceptor",
-                     [Driver, gen_rpc_helper:socket_to_string(ListSock)]),
                 Peer = DriverMod:get_peer(AccSock),
                 {ok, AccPid} = gen_rpc_acceptor_sup:start_child(Driver, Peer),
                 case DriverMod:copy_sock_opts(ListSock, AccSock) of
@@ -86,19 +92,29 @@ waiting_for_connection(internal, accept, #state{socket=ListSock, driver=Driver, 
                 ok = gen_rpc_acceptor:set_socket(AccPid, AccSock)
             catch
                 EC:Err:Stack ->
-                    ?log(warning, "event=failed_to_accept driver=~p ~p=~p stack=~p",
-                         [Driver, EC, Err, Stack])
+                    ?log(warning, "failed_to_accept",
+                         #{driver => Driver,
+                           error_class => EC,
+                           error => Err,
+                           stack => Stack})
             end,
             {keep_state_and_data, {next_event,internal,accept}};
         {error, Reason} ->
-            ?log(error, "event=socket_error_event driver=~s socket=\"~s\" event=\"~p\" action=stopping",
-                 [Driver, gen_rpc_helper:socket_to_string(ListSock), Reason]),
+            ?log(error, "socket_error_event",
+                 #{driver => Driver,
+                   socket => gen_rpc_helper:socket_to_string(ListSock),
+                   event => Reason,
+                   action => stopping}),
             {stop, {socket_error, Reason}, State}
     end.
 
 handle_event(EventType, Event, StateName, #state{socket=Socket, driver=Driver} = State) ->
-    ?log(error, "event=uknown_event driver=~s socket=\"~s\" event_type=\"~p\" payload=\"~p\" action=stopping",
-         [Driver, gen_rpc_helper:socket_to_string(Socket), EventType, Event]),
+    ?log(error, "unknown_event",
+         #{driver => Driver,
+           socket => gen_rpc_helper:socket_to_string(Socket),
+           event_type => EventType,
+           payload => Event,
+           action => stopping}),
     {stop, {StateName, undefined_event, Event}, State}.
 
 terminate(_Reason, _StateName, _State) ->

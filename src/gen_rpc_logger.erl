@@ -1,0 +1,43 @@
+%%--------------------------------------------------------------------
+%% Copyright (c) 2025 EMQ Technologies Co., Ltd. All Rights Reserved.
+%%
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
+%%
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
+%%--------------------------------------------------------------------
+
+-module(gen_rpc_logger).
+
+-include("logger.hrl").
+
+-export([log/4]).
+-export_type([type/0, msg/0]).
+
+%% Type values correspond to: ?T_CLIENT, ?T_ACCEPTOR, ?T_DISPATCHER, ?T_AUTH, ?T_SERVER, ?T_DRIVER
+-type type() :: ?T_CLIENT | ?T_ACCEPTOR | ?T_DISPATCHER | ?T_AUTH | ?T_SERVER | ?T_DRIVER.
+-type msg() :: atom() | string() | binary().
+-spec log(atom(), type(), msg(), fun(() -> map())) -> ok.
+log(Level, Type, Msg, Data) ->
+    case logger:allow(Level, gen_rpc) of
+        true ->
+            do_log(Level, Type, Msg, Data);
+        false ->
+            ok
+    end.
+
+do_log(Level, Type, Msg, DataFn) ->
+    Data = DataFn(),
+    case application:get_env(gen_rpc, logger) of
+        undefined ->
+            logger:log(Level, Data#{msg => Msg, domain => [gen_rpc, Type]});
+        Module ->
+            apply(Module, log, [Level, Type, Msg, Data])
+    end.

@@ -1,7 +1,7 @@
 %%% -*-mode:erlang;coding:utf-8;tab-width:4;c-basic-offset:4;indent-tabs-mode:()-*-
 %%% ex: set ft=erlang fenc=utf-8 sts=4 ts=4 sw=4 et:
 %%%
-%%% Copyright (c) 2022-2023 EMQ Technologies Co., Ltd. All Rights Reserved.
+%%% Copyright (c) 2022-2025 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%% Copyright 2015 Panagiotis Papadomitsos. All Rights Reserved.
 %%%
 %%% Original concept inspired and some code copied from
@@ -22,6 +22,8 @@
 -include("guards.hrl").
 %%% Include helpful guard macros
 -include("types.hrl").
+
+-define(log(Level, Msg, Data), ?LOG(Level, ?T_CLIENT, Msg, Data)).
 
 -define(NAME(NODE_OR_TUPLE), {client, NODE_OR_TUPLE}).
 
@@ -188,7 +190,9 @@ nb_yield({Pid,Ref}, Timeout) when is_pid(Pid), is_reference(Ref), ?is_timeout(Ti
             {value,Result}
     after
         Timeout ->
-            ?log(debug, "event=nb_yield_timeout async_call_pid=\"~p\" async_call_ref=\"~p\"", [Pid, Ref]),
+            ?log(debug, "nb_yield_timeout",
+                 #{async_call_pid => Pid,
+                   async_call_ref => Ref}),
             timeout
     end.
 
@@ -248,11 +252,16 @@ init({NodeOrTuple}) ->
     ok = gen_rpc_helper:set_optimal_process_flags(),
     case gen_rpc_helper:get_client_config_per_node(Node) of
         {error, Reason} ->
-            ?log(error, "event=external_source_error action=falling_back_to_local reason=\"~s\"", [Reason]),
+            ?log(error, "external_source_error",
+                 #{action => falling_back_to_local,
+                   cause => Reason}),
             {stop, {badrpc, {external_source_error, Reason}}};
         {Driver, Port} ->
             {DriverMod, DriverClosed, DriverError} = gen_rpc_helper:get_client_driver_options(Driver),
-            ?log(info, "event=initializing_client driver=~s node=\"~s\" port=~B", [Driver, Node, Port]),
+            ?log(debug, "initializing_client",
+                 #{driver => Driver,
+                   node => Node,
+                   port => Port}),
             MaxBatchSize = application:get_env(?APP, max_batch_size, 0),
             InitialState = #state{socket=undefined,
                                   driver=Driver,
@@ -267,12 +276,6 @@ init({NodeOrTuple}) ->
 
 %% Handle async connection initialization
 handle_continue({connect, Node, Port, Key}, #state{driver_mod = DriverMod, driver = Driver} = State) ->
-    IdForLog = case Key =:= undefined of
-                   true ->
-                       io_lib:format("peer=~s://~s:~p", [Driver, Node, Port]);
-                   false ->
-                       io_lib:format("peer=~s://~s:~p, key=~p", [Driver, Node, Port, Key])
-               end,
     case gen_rpc_auth:connect_with_auth(DriverMod, Node, Port) of
         {ok, Socket} ->
             Interval = application:get_env(?APP, keepalive_interval, 60), % 60s
@@ -287,33 +290,47 @@ handle_continue({connect, Node, Port, Key}, #state{driver_mod = DriverMod, drive
                     ConnectedState = State#state{socket=Socket, keepalive=KeepAlive},
                     {noreply, ConnectedState, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
                 {error, Error} ->
-                    ?log(error, "event=start_keepalive_failed ~s reason=\"~0p\"", [IdForLog, Error]),
+                    ?log(error, "start_keepalive_failed",
+                         #{driver => Driver,
+                           node => Node,
+                           port => Port,
+                           key => Key,
+                           cause => Error}),
                     {stop, {shutdown, Error}, State}
             end;
         {error, ReasonTuple} ->
-            ?log(error, "event=client_authentication_failed ~s reason=\"~0p\"", [IdForLog, ReasonTuple]),
+            ?log(error, "client_authentication_failed",
+                 #{driver => Driver,
+                   node => Node,
+                   port => Port,
+                   key => Key,
+                   cause => ReasonTuple}),
             {stop, {shutdown, ReasonTuple}, State};
         {unreachable, Reason} ->
             %% This should be badtcp but to conform with
             %% the RPC library we return badrpc
-            ?log(error, "event=connect_to_remote_server, ~s, reason=\"~0p\"", [IdForLog, Reason]),
+            ?log(error, "failed_to_connect_server",
+                 #{driver => Driver,
+                   node => Node,
+                   port => Port,
+                   key => Key,
+                   cause => Reason}),
             {stop, {shutdown, {badrpc, Reason}}, State}
     end.
 
 %% This is the actual CALL handler
 handle_call({{call,_M,_F,_A} = PacketTuple, SendTimeout}, Caller, #state{socket=Socket, driver=Driver, driver_mod=DriverMod} = State) ->
     Packet = erlang:term_to_iovec({PacketTuple, Caller}),
-    ?log(debug, "message=call event=constructing_call_term driver=~s socket=\"~s\" caller=\"~p\"",
-         [Driver, gen_rpc_helper:socket_to_string(Socket), Caller]),
     ok = DriverMod:set_send_timeout(Socket, SendTimeout),
     case DriverMod:send(Socket, Packet) of
         {error, Reason} ->
-            ?log(error, "message=call event=transmission_failed driver=~s socket=\"~s\" caller=\"~p\" reason=\"~p\"",
-                 [Driver, gen_rpc_helper:socket_to_string(Socket), Caller, Reason]),
+            ?log(error, "failed_to_send_call",
+                 #{driver => Driver,
+                   socket => gen_rpc_helper:socket_to_string(Socket),
+                   caller => Caller,
+                   cause => Reason}),
             {stop, {shutdown, Reason}, Reason, State};
         ok ->
-            ?log(debug, "message=call event=transmission_succeeded driver=~s socket=\"~s\" caller=\"~p\"",
-                 [Driver, gen_rpc_helper:socket_to_string(Socket), Caller]),
             %% We need to enable the socket and perform the call only if the call succeeds
             ok = DriverMod:activate_socket(Socket),
             {noreply, State, gen_rpc_helper:get_inactivity_timeout(?MODULE)}
@@ -321,24 +338,27 @@ handle_call({{call,_M,_F,_A} = PacketTuple, SendTimeout}, Caller, #state{socket=
 
 %% Catch-all for calls - die if we get a message we don't expect
 handle_call(Msg, _Caller, #state{socket=Socket, driver=Driver} = State) ->
-    ?log(error, "event=uknown_call_received driver=~s socket=\"~s\" message=\"~p\" action=stopping",
-         [Driver, gen_rpc_helper:socket_to_string(Socket), Msg]),
+    ?log(error, "unknown_call_received",
+         #{driver => Driver,
+           socket => gen_rpc_helper:socket_to_string(Socket),
+           message => Msg,
+           action => stopping}),
     {stop, {unknown_call, Msg}, {unknown_call, Msg}, State}.
 
 %% This is the actual ASYNC CALL handler
 handle_cast({{async_call,_M,_F,_A} = PacketTuple, Caller, Ref}, #state{socket=Socket, driver=Driver, driver_mod=DriverMod} = State) ->
     Packet = erlang:term_to_iovec({PacketTuple, {Caller,Ref}}),
-    ?log(debug, "message=async_call event=constructing_async_call_term socket=\"~s\" worker_pid=\"~p\" async_call_ref=\"~p\"",
-         [gen_rpc_helper:socket_to_string(Socket), Caller, Ref]),
     ok = DriverMod:set_send_timeout(Socket, undefined),
     case DriverMod:send_async(Socket, Packet) of
         {error, Reason} ->
-            ?log(error, "message=async_call event=transmission_failed driver=~s socket=\"~s\" worker_pid=\"~p\" call_ref=\"~p\" reason=\"~p\"",
-                 [Driver, gen_rpc_helper:socket_to_string(Socket), Caller, Ref, Reason]),
+            ?log(error, "failed_to_send_async_call",
+                 #{driver => Driver,
+                   socket => gen_rpc_helper:socket_to_string(Socket),
+                   worker_pid => Caller,
+                   call_ref => Ref,
+                   cause => Reason}),
             {stop, {shutdown, Reason}, Reason, State};
         ok ->
-            ?log(debug, "message=async_call event=transmission_succeeded driver=~s socket=\"~s\" worker_pid=\"~p\" call_ref=\"~p\"",
-                 [Driver, gen_rpc_helper:socket_to_string(Socket), Caller, Ref]),
             %% We need to enable the socket and perform the call only if the call succeeds
             ok = DriverMod:activate_socket(Socket),
             %% Reply will be handled from the worker
@@ -347,8 +367,11 @@ handle_cast({{async_call,_M,_F,_A} = PacketTuple, Caller, Ref}, #state{socket=So
 
 %% Catch-all for casts - die if we get a message we don't expect
 handle_cast(Msg, #state{socket=Socket, driver=Driver} = State) ->
-    ?log(error, "event=uknown_cast_received driver=~s socket=\"~s\" message=\"~p\" action=stopping",
-         [Driver, gen_rpc_helper:socket_to_string(Socket), Msg]),
+    ?log(error, "unknown_cast_received",
+         #{driver => Driver,
+           socket => gen_rpc_helper:socket_to_string(Socket),
+           message => Msg,
+           action => stopping}),
     {stop, {unknown_cast, Msg}, State}.
 
 %% This is the actual CAST handler for CAST
@@ -371,40 +394,46 @@ handle_info({Driver,Socket,Data}, #state{socket=Socket, driver=Driver, driver_mo
     ?tp_ignore_side_effects_in_prod(
         gen_rpc_client_receive_message, #{ socket => gen_rpc_helper:socket_to_string(Socket)
                                          , packet => MessageFromWire
+                                         , domain => ?D_CLIENT
                                          }),
     _Reply = case MessageFromWire of
         {call, Caller, Reply} ->
-            ?log(debug, "event=call_reply_received driver=~s socket=\"~s\" caller=\"~p\" action=sending_reply",
-                 [Driver, gen_rpc_helper:socket_to_string(Socket), Caller]),
             gen_server:reply(Caller, Reply);
         {async_call, {Caller, Ref}, Reply} ->
-            ?log(debug, "event=async_call_reply_received driver=~s socket=\"~s\" caller=\"~p\" action=sending_reply",
-                 [Driver, gen_rpc_helper:socket_to_string(Socket), Caller]),
             Caller ! {self(), Ref, async_call, Reply};
         {sbcast, {Caller, Ref, Node}, Reply} ->
-            ?log(debug, "event=sbcast_reply_received driver=~s socket=\"~s\" caller=\"~p\" reference=\"~p\" action=sending_reply",
-                 [Driver, gen_rpc_helper:socket_to_string(Socket), Caller, Ref]),
             Caller ! {Ref, Node, Reply};
         OtherData ->
-            ?log(error, "event=erroneous_reply_received driver=~s socket=\"~s\" data=\"~p\" action=ignoring",
-                 [Driver, gen_rpc_helper:socket_to_string(Socket), OtherData])
+            ?log(error, "erroneous_reply_received",
+                 #{driver => Driver,
+                   socket => gen_rpc_helper:socket_to_string(Socket),
+                   data => OtherData,
+                   action => ignoring})
     end,
     ok = DriverMod:activate_socket(Socket),
     {noreply, State, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
 
 handle_info({DriverClosed, Socket}, #state{socket=Socket, driver=Driver, driver_closed=DriverClosed} = State) ->
-    ?log(error, "message=channel_closed driver=~s socket=\"~s\" action=stopping", [Driver, gen_rpc_helper:socket_to_string(Socket)]),
+    ?log(error, "rpc_channel_closed",
+         #{driver => Driver,
+           socket => gen_rpc_helper:socket_to_string(Socket),
+           action => stopping}),
     {stop, normal, State};
 
 handle_info({DriverError, Socket, Reason}, #state{socket=Socket, driver=Driver, driver_error=DriverError} = State) ->
-    ?log(error, "message=channel_error driver=~s socket=\"~s\" reason=\"~p\" action=stopping",
-         [Driver, gen_rpc_helper:socket_to_string(Socket), Reason]),
+    ?log(error, "rpc_channel_error",
+         #{driver => Driver,
+           socket => gen_rpc_helper:socket_to_string(Socket),
+           cause => Reason,
+           action => stopping}),
     {stop, normal, State};
 
 %% Handle the inactivity timeout gracefully
 handle_info(timeout, #state{socket=Socket, driver=Driver} = State) ->
-    ?log(info, "message=timeout event=client_inactivity_timeout driver=~s socket=\"~s\" action=stopping",
-         [Driver, gen_rpc_helper:socket_to_string(Socket)]),
+    ?log(info, "client_inactivity_timeout",
+         #{driver => Driver,
+           socket => gen_rpc_helper:socket_to_string(Socket),
+           action => stopping}),
     {stop, normal, State};
 
 handle_info({keepalive, check}, #state{driver=Driver, keepalive=KeepAlive} = State) ->
@@ -414,8 +443,10 @@ handle_info({keepalive, check}, #state{driver=Driver, keepalive=KeepAlive} = Sta
         {error, timeout} ->
             send_ping(State#state{keepalive=gen_rpc_keepalive:resume(KeepAlive)});
         {error, Reason} ->
-            ?log(error, "event=keepalive_check_failed driver=~p, reason=\"~p\" action=stopping",
-                [Driver, Reason]),
+            ?log(error, "keepalive_check_failed",
+                 #{driver => Driver,
+                   cause => Reason,
+                   action => stopping}),
             {stop, {shutdown, Reason}, State}
     end;
 
@@ -427,8 +458,11 @@ handle_info({inet_reply, _Socket, {error, Reason}}, State) ->
 
 %% Catch-all for info - our protocol is strict so die!
 handle_info(Msg, #state{socket=Socket, driver=Driver} = State) ->
-    ?log(error, "event=uknown_message_received driver=~s socket=\"~s\" message=\"~p\" action=stopping",
-         [Driver, gen_rpc_helper:socket_to_string(Socket), Msg]),
+    ?log(error, "unknown_message_received",
+         #{driver => Driver,
+           socket => gen_rpc_helper:socket_to_string(Socket),
+           message => Msg,
+           action => stopping}),
     {stop, {unknown_info, Msg}, State}.
 
 %% Stub functions
@@ -473,6 +507,7 @@ send_cast(PacketTuple, #state{socket=Socket, driver=Driver, driver_mod=DriverMod
                                        , socket => gen_rpc_helper:socket_to_string(Socket)
                                        , driver => Driver
                                        , reason => Reason
+                                       , domain => ?D_CLIENT
                                        }),
             {stop, {shutdown, Reason}, State};
         ok ->
@@ -480,8 +515,6 @@ send_cast(PacketTuple, #state{socket=Socket, driver=Driver, driver_mod=DriverMod
                      true -> DriverMod:activate_socket(Socket);
                      _    -> ok
                  end,
-            ?log(debug, "message=cast event=transmission_succeeded driver=~s socket=\"~s\"",
-                 [Driver, gen_rpc_helper:socket_to_string(Socket)]),
             {noreply, State, gen_rpc_helper:get_inactivity_timeout(?MODULE)}
     end.
 
@@ -490,12 +523,12 @@ send_ping(#state{socket=Socket, driver=Driver, driver_mod=DriverMod} = State) ->
     ok = DriverMod:set_send_timeout(Socket, undefined),
     case DriverMod:send(Socket, Packet) of
         {error, Reason} ->
-            ?log(error, "message=ping event=transmission_failed driver=~s socket=\"~s\" reason=\"~p\"",
-                 [Driver, gen_rpc_helper:socket_to_string(Socket), Reason]),
+            ?log(error, "faild_to_send_ping",
+                 #{driver => Driver,
+                   socket => gen_rpc_helper:socket_to_string(Socket),
+                   cause => Reason}),
             {stop, {shutdown, Reason}, State};
         ok ->
-            ?log(debug, "message=ping event=transmission_succeeded driver=~s socket=\"~s\"",
-                 [Driver, gen_rpc_helper:socket_to_string(Socket)]),
             %% We should keep this flag same as previous
             ok = DriverMod:activate_socket(Socket),
             {noreply, State, gen_rpc_helper:get_inactivity_timeout(?MODULE)}
@@ -512,7 +545,7 @@ cast_worker(NodeOrTuple, Cast, Ret, SendTimeout) ->
                         }),
     case gen_rpc_registry:whereis_name(PidName) of
         undefined ->
-            ?tp(info, gen_rpc_client_process_not_found, #{target => NodeOrTuple}),
+            ?tp(info, gen_rpc_client_process_not_found, #{target => NodeOrTuple, domain => ?D_CLIENT}),
             case gen_rpc_dispatcher:start_client(NodeOrTuple) of
                 {ok, NewPid} ->
                     %% We take care of CALL inside the gen_server
@@ -535,7 +568,9 @@ async_call_worker(NodeOrTuple, M, F, A, Ref) ->
     PidName = ?NAME(NodeOrTuple),
     case gen_rpc_registry:whereis_name(PidName) of
         undefined ->
-            ?log(info, "event=client_process_not_found target=\"~p\" action=spawning_client", [NodeOrTuple]),
+            ?log(debug, "client_process_not_found",
+                 #{target => NodeOrTuple,
+                   action => spawning_client}),
             case gen_rpc_dispatcher:start_client(NodeOrTuple) of
                 {ok, NewPid} ->
                     %% Monitor the client process in case it dies before handling the cast
@@ -546,7 +581,6 @@ async_call_worker(NodeOrTuple, M, F, A, Ref) ->
                     wait_for_yield_and_send(RpcError, Ref, TTL)
             end;
         Pid ->
-            ?log(debug, "event=client_process_found pid=\"~p\" target=\"~p\"", [Pid, NodeOrTuple]),
             %% Monitor the client process in case it dies before handling the cast
             MRef = erlang:monitor(process, Pid),
             ok = gen_server:cast(Pid, {{async_call,M,F,A}, self(), Ref}),
@@ -634,7 +668,9 @@ maybe_start_client(NodeOrTuple) ->
     PidName = ?NAME(NodeOrTuple),
     case gen_rpc_registry:whereis_name(PidName) of
         undefined ->
-            ?log(info, "event=client_process_not_found target=\"~p\" action=spawning_client", [NodeOrTuple]),
+            ?log(debug, "client_process_not_found",
+                 #{target => NodeOrTuple,
+                   action => spawning_client}),
             gen_rpc_dispatcher:start_client(NodeOrTuple);
         Pid ->
             {ok, Pid}

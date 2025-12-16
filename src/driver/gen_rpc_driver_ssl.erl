@@ -1,7 +1,7 @@
 %%% -*-mode:erlang;coding:utf-8;tab-width:4;c-basic-offset:4;indent-tabs-mode:()-*-
 %%% ex: set ft=erlang fenc=utf-8 sts=4 ts=4 sw=4 et:
 %%%
-%%% Copyright (c) 2022-2023 EMQ Technologies Co., Ltd. All Rights Reserved.
+%%% Copyright (c) 2022-2025 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%% Copyright 2015 Panagiotis Papadomitsos. All Rights Reserved.
 %%%
 %%% Original concept inspired and some code copied from
@@ -23,6 +23,8 @@
 -include("tcp.hrl").
 %%% Include helpful guard macros
 -include("guards.hrl").
+
+-define(log(Level, Msg, Data), ?LOG(Level, ?T_DRIVER, Msg, Data)).
 
 %%% Public API
 -export([connect/2,
@@ -52,8 +54,11 @@ connect(Node, Port) when is_atom(Node) ->
     SslOpts = merge_ssl_options(client),
     case ssl:connect(Host, Port, SslOpts ++ gen_rpc_helper:get_user_tcp_opts(connect), ConnTO) of
         {ok, Socket} ->
-            ?log(debug, "event=connect_to_remote_server, peer=~s, port=~p, socket=~s",
-                 [Node, Port, gen_rpc_helper:socket_to_string(Socket)]),
+            ?log(debug, "connect_to_remote_server",
+                 #{peer => Node,
+                   port => Port,
+                   protocol => ssl,
+                   socket => gen_rpc_helper:socket_to_string(Socket)}),
             {ok, Socket};
         {error, Reason} ->
             {error, {badtcp,Reason}}
@@ -82,12 +87,14 @@ send(Socket, Data) when is_tuple(Socket) ->
             ?tp(error, gen_rpc_error, #{ error  => send_data_failed
                                        , socket => gen_rpc_helper:socket_to_string(Socket)
                                        , reason => timeout
+                                       , domain => ?D_DRIVER
                                        }),
             {error, {badtcp,send_timeout}};
         {error, Reason} ->
             ?tp(error, gen_rpc_error, #{ error  => send_data_failed
                                        , socket => gen_rpc_helper:socket_to_string(Socket)
                                        , reason => Reason
+                                       , domain => ?D_DRIVER
                                        }),
             {error, {badtcp, Reason}};
         ok ->
