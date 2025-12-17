@@ -21,7 +21,6 @@
 -export([log/4]).
 -export_type([type/0, msg/0]).
 
-%% Type values correspond to: ?T_CLIENT, ?T_ACCEPTOR, ?T_DISPATCHER, ?T_AUTH, ?T_SERVER, ?T_DRIVER
 -type type() :: ?T_CLIENT | ?T_ACCEPTOR | ?T_DISPATCHER | ?T_AUTH | ?T_SERVER | ?T_DRIVER.
 -type msg() :: atom() | string() | binary().
 -spec log(atom(), type(), msg(), fun(() -> map())) -> ok.

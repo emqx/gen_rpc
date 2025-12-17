@@ -190,9 +190,6 @@ nb_yield({Pid,Ref}, Timeout) when is_pid(Pid), is_reference(Ref), ?is_timeout(Ti
             {value,Result}
     after
         Timeout ->
-            ?log(debug, "nb_yield_timeout",
-                 #{async_call_pid => Pid,
-                   async_call_ref => Ref}),
             timeout
     end.
 
