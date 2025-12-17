@@ -35,13 +35,10 @@ start_link() ->
 
 -spec start_child(node_or_tuple()) -> supervisor:startchild_ret().
 start_child(NodeOrTuple) when ?is_node_or_tuple(NodeOrTuple) ->
-    ?tp(debug, gen_rpc_starting_new_client, #{target => NodeOrTuple}),
+    ?tp(debug, gen_rpc_starting_new_client, #{target => NodeOrTuple, domain => ?D_CLIENT}),
     case supervisor:start_child(?MODULE, [NodeOrTuple]) of
         {error, {already_started, CPid}} ->
-            %% If we've already started the child, terminate it and start anew
-            ?tp(warning, gen_rpc_restarting_client, #{target => NodeOrTuple, old_client => CPid}),
-            ok = stop_child(CPid),
-            supervisor:start_child(?MODULE, [NodeOrTuple]);
+            {ok, CPid};
         {error, OtherError} ->
             {error, OtherError};
         {ok, Pid} ->
@@ -50,7 +47,7 @@ start_child(NodeOrTuple) when ?is_node_or_tuple(NodeOrTuple) ->
 
 -spec stop_child(pid()) -> ok.
 stop_child(Pid) when is_pid(Pid) ->
-    ?tp(debug, gen_rpc_stopping_client, #{client_pid => Pid}),
+    ?tp(debug, gen_rpc_stopping_client, #{client_pid => Pid, domain => ?D_CLIENT}),
     _ = supervisor:terminate_child(?MODULE, Pid),
     ok.
 

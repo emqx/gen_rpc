@@ -1,7 +1,7 @@
 %%% -*-mode:erlang;coding:utf-8;tab-width:4;c-basic-offset:4;indent-tabs-mode:()-*-
 %%% ex: set ft=erlang fenc=utf-8 sts=4 ts=4 sw=4 et:
 %%%
-%%% Copyright (c) 2022-2023 EMQ Technologies Co., Ltd. All Rights Reserved.
+%%% Copyright (c) 2022-2025 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%% Copyright 2015 Panagiotis Papadomitsos. All Rights Reserved.
 %%%
 %%% Original concept inspired and some code copied from
@@ -21,6 +21,8 @@
 -include("tcp.hrl").
 %%% Include helpful guard macros
 -include("guards.hrl").
+
+-define(log(Level, Msg, Data), ?LOG(Level, ?T_DRIVER, Msg, Data)).
 
 %%% Public API
 -export([connect/2,
@@ -49,8 +51,11 @@ connect(Node, Port) when is_atom(Node) ->
     ConnTO = gen_rpc_helper:get_connect_timeout(),
     case gen_tcp:connect(Host, Port, ?TCP_DEFAULT_OPTS ++ gen_rpc_helper:get_user_tcp_opts(connect), ConnTO) of
         {ok, Socket} ->
-            ?log(debug, "event=connect_to_remote_server, peer=~s, port=~p socket=~s",
-                 [Node, Port, gen_rpc_helper:socket_to_string(Socket)]),
+            ?log(debug, "connect_to_remote_server",
+                 #{peer => Node,
+                   port => Port,
+                   protocol => tcp,
+                   socket => gen_rpc_helper:socket_to_string(Socket)}),
             {ok, Socket};
         {error, Reason} ->
             {error, {badtcp,Reason}}
@@ -77,10 +82,8 @@ activate_socket(Socket, N) when is_port(Socket) ->
 send(Socket, Data) when is_port(Socket) ->
     case gen_tcp:send(Socket, Data) of
         {error, timeout} ->
-            ?log(error, "event=send_data_failed socket=\"~s\" reason=\"timeout\"", [gen_rpc_helper:socket_to_string(Socket)]),
             {error, {badtcp,send_timeout}};
         {error, Reason} ->
-            ?log(error, "event=send_data_failed socket=\"~s\" reason=\"~p\"", [gen_rpc_helper:socket_to_string(Socket), Reason]),
             {error, {badtcp,Reason}};
         ok ->
             ok
@@ -90,7 +93,6 @@ send(Socket, Data) when is_port(Socket) ->
 send_async(Socket, Data) when is_port(Socket) ->
     case send_tcp_data(Socket, Data) of
         {error, Reason} ->
-            ?log(error, "event=send_async_failed socket=\"~s\" reason=\"~p\"", [gen_rpc_helper:socket_to_string(Socket), Reason]),
             {error, {badtcp,Reason}};
         ok ->
             ok

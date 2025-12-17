@@ -180,11 +180,12 @@ and pass them as the node list in the multi-node function.
 
 - `acceptor_socket_active_n`: Integer (default = 100) for RPC acceptor flow control.
 
-## Logging
-
-`gen_rpc` uses [hut](https://github.com/tolbrino/hut) for logging. This allows the developer to integrate the logging library of their choice by providing the appropriate definition in their `rebar.config`. The default logging facility of `hut` is SASL.
-
-For more information on how to enable `gen_rpc` to use your own logging facility, consult the [README.md](https://github.com/tolbrino/hut#supported-logging-backends) of `hut`.
+- `logger`: A module which exports `log/4` API for RPC client events: `log(Level, Type, Msg, Data)` where:
+  - `Level`: is the log level, `debug`, `info`, `error`, etc
+  - `Type`: The type of message, possible values are: `client_init`, `client_send`, ... TODO
+  - `Msg` is a `snake_case` string which is both readable and unique (so to help log indexer).
+  - `Data` is for log context.
+  If not configured, module `gen_rpc_logger` is used.
 
 ## SSL Configuration
 

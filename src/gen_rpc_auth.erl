@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) 2022-2023 EMQ Technologies Co., Ltd. All Rights Reserved.
+%% Copyright (c) 2022-2025 EMQ Technologies Co., Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -17,6 +17,8 @@
 
 -include("logger.hrl").
 -include_lib("snabbkaffe/include/trace.hrl").
+
+-define(log(Level, Msg, Data), ?LOG(Level, ?T_AUTH, Msg, Data)).
 
 -ifdef(TEST).
 -include_lib("proper/include/proper.hrl").
@@ -85,7 +87,10 @@ connect_with_auth(Driver, Node, Port) ->
             {ok, Socket};
         Err when Fallback, Err =:= {error, {badtcp, closed}} orelse
                            Err =:= {error, ?UNAUTHORIZED} ->
-            ?tp(warning, gen_rpc_insecure_fallback, #{peer => {Node, Port}, role => client}),
+            ?tp(warning, gen_rpc_insecure_fallback, #{peer => {Node, Port},
+                                                      role => client,
+                                                      domain => ?D_AUTH
+                                                     }),
             connect_with_auth(Driver, Node, Port, fun authenticate_server_insecure/3);
         Result ->
             Result
@@ -100,13 +105,13 @@ authenticate_client(Driver, Socket, Peer) ->
         {ok, Data} ->
             case authenticate_client_cr(Driver, Socket, Data) of
                 {error, ?BADPACKET} when Fallback ->
-                    ?tp(warning, gen_rpc_insecure_fallback, #{peer => Peer, role => server}),
+                    ?tp(warning, gen_rpc_insecure_fallback, #{peer => Peer, role => server, domain => ?D_AUTH}),
                     authenticate_client_insecure(Driver, Socket, Peer, Data);
                 Result ->
                     Result
             end;
         {error, Reason} ->
-            ?tp(error, gen_rpc_client_auth_timeout, #{peer => Peer, error => Reason}),
+            ?tp(error, gen_rpc_client_auth_timeout, #{peer => Peer, error => Reason, domain => ?D_AUTH}),
             {error, {badtcp, Reason}}
     end.
 
@@ -120,18 +125,18 @@ authenticate_server_cr(Driver, RemoteNode, Socket) ->
     try
         %% Send challenge:
         {ClientChallenge, Packet} = stage1(RemoteNode),
-        ?tp(debug, gen_rpc_authentication_stage, #{stage => 1, socket => Socket, peer => Peer}),
+        ?tp(debug, gen_rpc_authentication_stage, #{stage => 1, socket => Socket, peer => Peer, domain => ?D_AUTH}),
         send(Driver, Socket, Packet, challenge),
         %% Receive response to our challenge and a new challenge:
         RecvPacket = recv(Driver, Socket, challenge_response),
         Result = stage3(ClientChallenge, RecvPacket),
-        ?tp(debug, gen_rpc_authentication_stage, #{stage => 3, socket => Socket, peer => Peer, result => Result}),
+        ?tp(debug, gen_rpc_authentication_stage, #{stage => 3, socket => Socket, peer => Peer, result => Result, domain => ?D_AUTH}),
         case Result of
             {ok, Packet2} ->
                 %% Send the final response to the client:
                 send(Driver, Socket, Packet2, response);
-            {error, Error} ->
-                ?tp(error, gen_rpc_authentication_bad_cookie, #{socket => Socket, error => Error, peer => Peer}),
+                {error, Error} ->
+                ?tp(error, gen_rpc_authentication_bad_cookie, #{socket => Socket, error => Error, peer => Peer, domain => ?D_AUTH}),
                 {error, Error}
         end
     catch
@@ -142,6 +147,7 @@ authenticate_server_cr(Driver, RemoteNode, Socket) ->
                  , peer => Peer
                  , socket => Socket
                  , action => Action
+                 , domain => ?D_AUTH
                  }),
             {error, {badtcp, Reason}}
     end.
@@ -150,14 +156,14 @@ authenticate_server_cr(Driver, RemoteNode, Socket) ->
 authenticate_client_cr(Driver, Socket, Data) ->
     Peer = Driver:get_peer(Socket),
     Result2 = stage2(Data),
-    ?tp(debug, gen_rpc_authentication_stage, #{stage => 2, socket => Socket, peer => Peer, result => Result2}),
+    ?tp(debug, gen_rpc_authentication_stage, #{stage => 2, socket => Socket, peer => Peer, result => Result2, domain => ?D_AUTH}),
     try
         case Result2 of
             {ok, {ServerChallenge, Packet}} ->
                 send(Driver, Socket, Packet, challenge_response),
                 RecvPacket = recv(Driver, Socket, response),
                 Result = stage4(ServerChallenge, RecvPacket),
-                ?tp(debug, gen_rpc_authentication_stage, #{stage => 4, socket => Socket, peer => Peer, result => Result}),
+                ?tp(debug, gen_rpc_authentication_stage, #{stage => 4, socket => Socket, peer => Peer, result => Result, domain => ?D_AUTH}),
                 Result;
             {error, ?BADNODE} = Error ->
                 send(Driver, Socket, term_to_binary(Error), challenge_error),
@@ -173,6 +179,7 @@ authenticate_client_cr(Driver, Socket, Data) ->
                  , peer => Peer
                  , socket => Socket
                  , action => Action
+                 , domain => ?D_AUTH
                  }),
             {error, {badtcp, Reason}}
     end.
@@ -203,16 +210,16 @@ authenticate_server_insecure(Driver, _Node, Socket) ->
         ?tp(gen_rpc_auth_server_insecure_recv, #{socket => Socket, response => RecvPacket}),
         try erlang:binary_to_term(RecvPacket, [safe]) of
             gen_rpc_connection_authenticated ->
-                ?log(debug, "event=connection_authenticated socket=\"~s\"",
-                     [gen_rpc_helper:socket_to_string(Socket)]),
                 ok;
             {gen_rpc_connection_rejected, invalid_cookie} ->
-                ?log(error, "event=authentication_rejected socket=\"~s\" reason=\"invalid_cookie\"",
-                     [gen_rpc_helper:socket_to_string(Socket)]),
+                ?log(error, "authentication_rejected",
+                     #{socket => gen_rpc_helper:socket_to_string(Socket),
+                       cause => invalid_cookie}),
                 {error, ?UNAUTHORIZED};
             _Else ->
-                ?log(error, "event=authentication_reception_error socket=\"~s\" reason=\"invalid_payload\"",
-                     [gen_rpc_helper:socket_to_string(Socket)]),
+                ?log(error, "authentication_reception_error",
+                     #{socket => gen_rpc_helper:socket_to_string(Socket),
+                       cause => invalid_payload}),
                 {error, ?BADPACKET}
         catch
             error:badarg ->
@@ -226,6 +233,7 @@ authenticate_server_insecure(Driver, _Node, Socket) ->
                  , peer => Peer
                  , socket => Socket
                  , action => Action
+                 , domain => ?D_AUTH
                  }),
             {error, {badtcp, Reason}}
     end.
@@ -262,7 +270,7 @@ authenticate_client_insecure(Driver, Socket, Peer, Data) ->
                    ok -> debug;
                    _  -> error
                end,
-    ?tp(LogLevel, gen_rpc_client_auth_fallback, #{peer => Peer, socket => Socket, result => CheckResult}),
+    ?tp(LogLevel, gen_rpc_client_auth_fallback, #{peer => Peer, socket => Socket, result => CheckResult, domain => ?D_AUTH}),
     try
         case CheckResult of
             ok ->
@@ -284,6 +292,7 @@ authenticate_client_insecure(Driver, Socket, Peer, Data) ->
                  , peer => Peer
                  , socket => Socket
                  , action => Action
+                 , domain => ?D_AUTH
                  }),
             {error, {badtcp, Reason}}
     end.
@@ -365,7 +374,8 @@ stage2(Secret, Packet) ->
                             {error, ?BADNODE}
                     end;
                 _ ->
-                    ?log(error, "event=authentication_stage2_invalid_packet packet=~p", [Packet]),
+                    ?log(error, "authentication_stage2_invalid_packet",
+                         #{packet => Packet}),
                     {error, ?BADPACKET}
             end;
         _Badterm ->

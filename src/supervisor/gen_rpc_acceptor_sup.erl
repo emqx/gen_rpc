@@ -30,6 +30,7 @@ start_link() ->
 start_child(Driver, Peer) when is_tuple(Peer) ->
     ?tp(debug, gen_rpc_starting_new_acceptor, #{ peer   => gen_rpc_helper:peer_to_string(Peer)
                                                , driver => Driver
+                                               , domain => ?D_ACCEPTOR
                                                }),
     case supervisor:start_child(?MODULE, [Driver,Peer]) of
         {error, {already_started, CPid}} ->
@@ -44,7 +45,7 @@ start_child(Driver, Peer) when is_tuple(Peer) ->
 
 -spec stop_child(pid()) ->  ok.
 stop_child(Pid) when is_pid(Pid) ->
-    ?tp(error, gen_rpc_error, #{error => acceptor_restart, pid => Pid}),
+    ?tp(error, gen_rpc_error, #{error => acceptor_restart, pid => Pid, domain => ?D_ACCEPTOR}),
     _ = supervisor:terminate_child(?MODULE, Pid),
     ok.
 
