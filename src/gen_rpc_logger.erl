@@ -37,6 +37,6 @@ do_log(Level, Type, Msg, DataFn) ->
     case application:get_env(gen_rpc, logger) of
         undefined ->
             logger:log(Level, Data#{msg => Msg, domain => [gen_rpc, Type]});
-        Module ->
+        {ok, Module} ->
             apply(Module, log, [Level, Type, Msg, Data])
     end.
