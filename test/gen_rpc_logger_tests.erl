@@ -36,8 +36,8 @@ custom_logger_test() ->
     %% Save original logger config
     OriginalLogger = application:get_env(gen_rpc, logger, undefined),
     try
-        %% Set the test logger module
-        application:set_env(gen_rpc, logger, ?MODULE),
+        %% Set the test logger module using set_logger function
+        ok = gen_rpc_logger:set_logger(?MODULE),
 
         %% Test with error level (always allowed)
         TestData = #{key => value, number => 42},

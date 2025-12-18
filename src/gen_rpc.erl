@@ -34,6 +34,9 @@
 %% Misc functions
 -export([nodes/0]).
 
+%% Set logger module
+-export([set_logger/1]).
+
 -export_type([node_or_tuple/0]).
 
 %%% ===================================================
@@ -144,3 +147,7 @@ sbcast(Nodes, Name, Msg) when is_list(Nodes), is_atom(Name) ->
 -spec nodes() -> list().
 nodes() ->
     gen_rpc_registry:nodes().
+
+-spec set_logger(module()) -> ok.
+set_logger(Module) ->
+    gen_rpc_logger:set_logger(Module).
