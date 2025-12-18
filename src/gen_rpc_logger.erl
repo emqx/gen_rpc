@@ -18,11 +18,16 @@
 
 -include("logger.hrl").
 
--export([log/4]).
+-export([set_logger/1, log/4]).
 -export_type([type/0, msg/0]).
 
 -type type() :: ?T_CLIENT | ?T_ACCEPTOR | ?T_DISPATCHER | ?T_AUTH | ?T_SERVER | ?T_DRIVER.
 -type msg() :: atom() | string() | binary().
+
+-spec set_logger(module()) -> ok.
+set_logger(Module) ->
+    application:set_env(gen_rpc, logger, Module).
+
 -spec log(atom(), type(), msg(), fun(() -> map())) -> ok.
 log(Level, Type, Msg, Data) ->
     case logger:allow(Level, gen_rpc) of
@@ -36,7 +41,7 @@ do_log(Level, Type, Msg, DataFn) ->
     Data = DataFn(),
     case application:get_env(gen_rpc, logger) of
         undefined ->
-            logger:log(Level, Data#{msg => Msg, domain => [gen_rpc, Type]});
+            logger:log(Level, Data#{msg => Msg}, #{domain => [gen_rpc, Type]});
         {ok, Module} ->
             apply(Module, log, [Level, Type, Msg, Data])
     end.
