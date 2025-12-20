@@ -373,13 +373,13 @@ handle_cast(Msg, #state{socket=Socket, driver=Driver} = State) ->
 
 %% This is the actual CAST handler for CAST
 handle_info({PacketTuple, SendTimeout}, State = #state{max_batch_size = 0}) when ?IS_CAST_MSG(PacketTuple) ->
-    send_cast(PacketTuple, State, SendTimeout, true);
+    send_cast(PacketTuple, State, SendTimeout);
 handle_info({PacketTuple, SendTimeout}, State = #state{max_batch_size = MaxBatchSize}) when ?IS_CAST_MSG(PacketTuple) ->
-    send_cast(drain_cast(MaxBatchSize, [PacketTuple]), State, SendTimeout, true);
+    send_cast(drain_cast(MaxBatchSize, [PacketTuple]), State, SendTimeout);
 
 %% This is the actual CAST handler for SBCAST
 handle_info({{sbcast,_Name,_Msg,_Caller} = PacketTuple, undefined}, State) ->
-    send_cast(PacketTuple, State, undefined, true);
+    send_cast(PacketTuple, State, undefined);
 
 %% Handle any TCP packet coming in
 handle_info({Driver,Socket,Data}, #state{socket=Socket, driver=Driver, driver_mod=DriverMod} = State) ->
@@ -484,7 +484,7 @@ set_process_label_if_supported(_Label) ->
 %%% ===================================================
 %%% Private functions
 %%% ===================================================
-send_cast(PacketTuple, #state{socket=Socket, driver=Driver, driver_mod=DriverMod} = State, SendTimeout, Activate) ->
+send_cast(PacketTuple, #state{socket=Socket, driver=Driver, driver_mod=DriverMod} = State, SendTimeout) ->
     ?tp_ignore_side_effects_in_prod(
         gen_rpc_send_packet, #{ packet  => PacketTuple
                               , timeout => SendTimeout
@@ -504,10 +504,7 @@ send_cast(PacketTuple, #state{socket=Socket, driver=Driver, driver_mod=DriverMod
                                        }),
             {stop, {shutdown, Reason}, State};
         ok ->
-            ok = case Activate of
-                     true -> DriverMod:activate_socket(Socket);
-                     _    -> ok
-                 end,
+            DriverMod:activate_socket(Socket),
             {noreply, State, gen_rpc_helper:get_inactivity_timeout(?MODULE)}
     end.
 
