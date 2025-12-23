@@ -57,17 +57,29 @@ term_to_iovec(Term) ->
   do_term_to_iovec(Term, Compress).
 
 do_term_to_iovec(Term, Compress) when is_integer(Compress), Compress >= 1 ->
-    Size = erlang:external_size(Term),
     {ok, CompressionThreshold} = application:get_env(?APP, compression_threshold),
-    case Size > CompressionThreshold of
-        true  ->
+
+    case CompressionThreshold of
+        0 ->
+            %% When threshold is 0, always compress not checking size
             Data = erlang:term_to_iovec(Term, [{compressed, min(Compress, 9)}]),
             ?tp_ignore_side_effects_in_prod(gen_rpc_compress_payload, #{ threshold => CompressionThreshold,
-                                                                         original_size => Size,
+                                                                         original_size => undefined,
                                                                          compressed_size => iolist_size(Data)
                                                                        }),
             Data;
-        false -> erlang:term_to_iovec(Term)
+        _ ->
+            Size = erlang:external_size(Term),
+            case Size > CompressionThreshold of
+                true  ->
+                    Data = erlang:term_to_iovec(Term, [{compressed, min(Compress, 9)}]),
+                    ?tp_ignore_side_effects_in_prod(gen_rpc_compress_payload, #{ threshold => CompressionThreshold,
+                                                                                 original_size => Size,
+                                                                                 compressed_size => iolist_size(Data)
+                                                                               }),
+                    Data;
+                false -> erlang:term_to_iovec(Term)
+            end
     end;
 do_term_to_iovec(Term, _) ->
     erlang:term_to_iovec(Term).
