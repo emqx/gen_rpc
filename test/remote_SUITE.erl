@@ -147,6 +147,36 @@ call_compress_above_threshold_higher_compression_level(_Config) ->
                 ?give_or_take(_Expected2 = 417, _Deviation2 = 5, CompressedSizeReply)
         end).
 
+call_compress_threshold_zero(_Config) ->
+    ok = application:set_env(?APP, compress, 1),
+    ok = application:set_env(?APP, compression_threshold, 0),
+    ok = rpc:call(?SLAVE, application, set_env, [?APP, compress, 1]),
+    ok = rpc:call(?SLAVE, application, set_env, [?APP, compression_threshold, 0]),
+
+    Term = << <<(I)>> || I <- lists:seq(1, 5000) >>,
+    ?check_trace(
+        begin
+            ?assertEqual(Term, gen_rpc:call(?SLAVE, erlang, hd, [[Term]]))
+        end,
+        fun(Trace) ->
+            [Req, Reply] = ?of_kind(gen_rpc_compress_payload, Trace),
+            #{ original_size := undefined,
+               threshold := 0,
+               compressed_size := CompressedSizeReq,
+               ?snk_meta := #{node := NodeReq}
+             } = Req,
+            ?assertEqual(NodeReq, node()),
+            ?give_or_take(_Expected1 = 448, _Deviation1 = 5, CompressedSizeReq),
+
+            #{ original_size := undefined,
+               threshold := 0,
+               compressed_size := CompressedSizeReply,
+               ?snk_meta := #{node := NodeReply}
+             } = Reply,
+            ?assertEqual(NodeReply, ?SLAVE),
+            ?give_or_take(_Expected2 = 425, _Deviation2 = 5, CompressedSizeReply)
+        end).
+
 call_compress_below_threshold(_Config) ->
     ok = application:set_env(?APP, compress, 9),
     ok = application:set_env(?APP, compression_threshold, 500),
