@@ -88,7 +88,12 @@
         %% NOTE: this option has no effect unless 'socket_ip' is an IPv6 interface.
         {ipv6_only, false},
         %% ActiveN option for RPC acceptor socket
-        {acceptor_socket_active_n, 100}
+        {acceptor_socket_active_n, 100},
+        %% Compression options
+        %% 0 means no compression, 9 max compression level
+        {compress, 0},
+        %% Threshold for compression to kick in
+        {compression_threshold, 1024}
     ]},
     {modules, []}]
 }.
