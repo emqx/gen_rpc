@@ -56,34 +56,6 @@ term_to_iovec(Term) ->
   {ok, Compress} = application:get_env(?APP, compress),
   do_term_to_iovec(Term, Compress).
 
-do_term_to_iovec(Term, Compress) when is_integer(Compress), Compress >= 1 ->
-    {ok, CompressionThreshold} = application:get_env(?APP, compression_threshold),
-
-    case CompressionThreshold of
-        0 ->
-            %% When threshold is 0, always compress not checking size
-            Data = erlang:term_to_iovec(Term, [{compressed, min(Compress, 9)}]),
-            ?tp_ignore_side_effects_in_prod(gen_rpc_compress_payload, #{ threshold => CompressionThreshold,
-                                                                         original_size => undefined,
-                                                                         compressed_size => iolist_size(Data)
-                                                                       }),
-            Data;
-        _ ->
-            Size = erlang:external_size(Term),
-            case Size > CompressionThreshold of
-                true  ->
-                    Data = erlang:term_to_iovec(Term, [{compressed, min(Compress, 9)}]),
-                    ?tp_ignore_side_effects_in_prod(gen_rpc_compress_payload, #{ threshold => CompressionThreshold,
-                                                                                 original_size => Size,
-                                                                                 compressed_size => iolist_size(Data)
-                                                                               }),
-                    Data;
-                false -> erlang:term_to_iovec(Term)
-            end
-    end;
-do_term_to_iovec(Term, _) ->
-    erlang:term_to_iovec(Term).
-
 %% Return the connected peer's IP
 -spec peer_to_string({inet:ip_address(), inet:port_number()} | inet:ip_address()) -> string().
 peer_to_string({Ip, Port}) when tuple_size(Ip) =:= 4 ->
@@ -379,3 +351,31 @@ offset(NodeName) ->
         {match, [OffsetAsString]} ->
             list_to_integer(OffsetAsString) rem ?MAX_PORT_LIMIT
     end.
+
+do_term_to_iovec(Term, Compress) when is_integer(Compress), Compress >= 1 ->
+    {ok, CompressionThreshold} = application:get_env(?APP, compression_threshold),
+    case CompressionThreshold of
+        0 ->
+            %% When threshold is 0, always compress not checking size
+            Data = erlang:term_to_iovec(Term, [{compressed, min(Compress, 9)}]),
+            ?tp_ignore_side_effects_in_prod(gen_rpc_compress_payload, #{ threshold => CompressionThreshold,
+                                                                         original_size => undefined,
+                                                                         compressed_size => iolist_size(Data)
+                                                                       }),
+            Data;
+        _ ->
+            Size = erlang:external_size(Term),
+            case Size > CompressionThreshold of
+                true  ->
+                    Data = erlang:term_to_iovec(Term, [{compressed, min(Compress, 9)}]),
+                    ?tp_ignore_side_effects_in_prod(gen_rpc_compress_payload, #{ threshold => CompressionThreshold,
+                                                                                 original_size => Size,
+                                                                                 compressed_size => iolist_size(Data)
+                                                                               }),
+                    Data;
+                false -> erlang:term_to_iovec(Term)
+            end
+    end;
+do_term_to_iovec(Term, _) ->
+    erlang:term_to_iovec(Term).
+
