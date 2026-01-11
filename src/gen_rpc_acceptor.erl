@@ -142,24 +142,16 @@ waiting_for_data(info, {Driver,Socket,Data},
         ?ORDERED_CAST(M, F, A) ->
             handle_cast(M, F, A, true, State),
             {keep_state_and_data, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
+        ?ABCAST(N, M) ->
+            handle_abcast(N, M, State),
+            {keep_state_and_data, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
         BatchCast when is_list(BatchCast) ->
             lists:foreach(fun(?CAST(M, F, A))         -> handle_cast(M, F, A, false, State);
                              (?ORDERED_CAST(M, F, A)) -> handle_cast(M, F, A, true, State);
+                             (?ABCAST(N, M))          -> handle_abcast(N, M, State);
                              (Invalid)                -> ?tp(error, gen_rpc_invalid_batch, #{socket => gen_rpc_helper:socket_to_string(Socket), data => Invalid, domain => ?D_ACCEPTOR})
                           end,
                           BatchCast),
-            {keep_state_and_data, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
-        {abcast, Name, Msg} ->
-            _Result = case check_if_module_allowed(erlang, Control, List) of
-                true ->
-                    erlang:send(Name, Msg);
-                false ->
-                    ?log(debug, "request_not_allowed",
-                         #{driver => Driver,
-                           socket => gen_rpc_helper:socket_to_string(Socket),
-                           control => Control,
-                           method => abcast})
-                end,
             {keep_state_and_data, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
         {sbcast, Name, Msg, Caller} ->
             Reply = case check_if_module_allowed(erlang, Control, List) of
@@ -370,6 +362,18 @@ handle_cast(M, F, A, Ordered, #state{socket=Socket, driver=Driver, peer=_Peer, c
                    mod => RealM
                   })
     end.
+
+handle_abcast(Name, Msg, #state{socket=Socket, driver=Driver, control=Control, list=List}) ->
+    case check_if_module_allowed(erlang, Control, List) of
+        true ->
+            Msg = erlang:send({Name, node()}, Msg);
+        false ->
+            ?log(debug, "request_not_allowed",
+                 #{driver => Driver,
+                   socket => gen_rpc_helper:socket_to_string(Socket),
+                   control => Control,
+                   method => abcast})
+        end.
 
 exec_cast(M, F, A, _PreserveOrder = true) ->
     {Pid, MRef} = erlang:spawn_monitor(M, F, A),

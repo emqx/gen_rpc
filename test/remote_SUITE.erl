@@ -351,6 +351,80 @@ wrong_cookie(_Config) ->
     {badrpc, invalid_cookie} = gen_rpc:call(?SLAVE, os, timestamp, []),
     true = erlang:set_cookie(node(), OrigCookie).
 
+multiple_casts_batch_test(_Config) ->
+    ok = application:set_env(?APP, max_batch_size, 100),
+    %% Send multiple casts and check that there are batches
+    N = 10000,
+    L = [integer_to_binary(L) || L <- lists:seq(12000, 12000 + N)],
+    Last = lists:last(L),
+    ?check_trace(
+       begin
+           ?wait_async_action( [begin
+                                    ?tp(test_cast, #{seqno => I}),
+                                    true = gen_rpc:cast({?SLAVE, 1}, gen_rpc_test_helper, test_call, [I])
+                                end || I <- L]
+                             , #{?snk_kind := do_test_call, seqno := Last}
+                             ),
+           ok
+       end,
+       [ {"casts are batched",
+          fun(Trace) ->
+                  Batches = ?of_kind(gen_rpc_cast_batch, Trace),
+                  % At least one batch must have a complete batch
+                  ?assert(lists:any(fun(Batch) -> maps:get(size, Batch) == 101 end, Batches)),
+                  [begin
+                       #{ size := BatchSize } = Batch,
+                       ?assert(BatchSize =< 101),
+                       ?assert(BatchSize >= 1)
+                   end || Batch <- Batches],
+                   ok
+          end}
+       ] ++ [fun gen_rpc_trace_props:all_casts_are_executed/1 | gen_rpc_trace_props:common_bundle()]).
+
+multiple_abcasts_batch_test(_Config) ->
+    ok = application:set_env(?APP, max_batch_size, 100),
+    %% Send multiple abcasts and check that there are batches
+    N = 10000,
+    L = [integer_to_binary(L) || L <- lists:seq(12000, 12000 + N)],
+    true = erlang:register(test_process_123, self()),
+    ?check_trace(
+       begin
+           [begin
+                abcast = gen_rpc:abcast([node()], test_process_123, I)
+            end || I <- L],
+           %% Receive all expected messages
+           ReceiveAll = fun F(0, Acc) ->
+                                Acc;
+                            F(Count, Acc) ->
+                                receive
+                                    Msg -> F(Count - 1, [Msg | Acc])
+                                after 5000 ->
+                                          ct:fail({timeout_waiting_for_messages,
+                                                   missing = Count,
+                                                   received = length(Acc)})
+                                end
+                        end,
+           Received = ReceiveAll(length(L), []),
+
+           %% Verify we received all messages
+           ?assertEqual(length(L), length(Received)),
+           ?assertEqual(lists:sort(L), lists:sort(Received)),
+           ok
+       end,
+       [ {"abcasts are batched",
+          fun(Trace) ->
+                  Batches = ?of_kind(gen_rpc_cast_batch, Trace),
+                  % At least one batch must have a complete batch
+                  ?assert(lists:any(fun(Batch) -> maps:get(size, Batch) == 101 end, Batches)),
+                  [begin
+                       #{ size := BatchSize } = Batch,
+                       ?assert(BatchSize =< 101),
+                       ?assert(BatchSize >= 1)
+                   end || Batch <- Batches],
+                   ok
+          end}
+       ] ++ gen_rpc_trace_props:common_bundle()).
+
 multiple_casts_test(_Config) ->
     %% Send multiple casts and check that they are received in order
     N = 10000,
