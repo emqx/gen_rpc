@@ -84,6 +84,33 @@ check_server_ports_available_manual_conflict_ipv6_test() ->
         end
     ).
 
+check_server_ports_available_manual_different_ipv4_ip_no_conflict_test() ->
+    with_ipv4_alias_support(
+        {127, 0, 0, 2},
+        fun() ->
+            {ok, Blocker} = gen_tcp:listen(
+                0,
+                [binary, {reuseaddr, true}, {active, false}, {ip, {127, 0, 0, 2}}]
+            ),
+            {ok, {_, Port}} = inet:sockname(Blocker),
+            try
+                with_env(
+                    #{
+                        port_discovery => manual,
+                        tcp_server_port => Port,
+                        ssl_server_port => false,
+                        socket_ip => {127, 0, 0, 1}
+                    },
+                    fun() ->
+                        ?assertEqual(ok, gen_rpc:check_server_ports_available())
+                    end
+                )
+            after
+                ok = gen_tcp:close(Blocker)
+            end
+        end
+    ).
+
 maybe_with_blocker(Port, Fun) ->
     case gen_tcp:listen(Port, [binary, {reuseaddr, true}, {active, false}, {ip, {127, 0, 0, 1}}]) of
         {ok, Blocker} ->
@@ -141,4 +168,15 @@ with_ipv6_support(Fun) ->
             ok;
         {error, Reason} ->
             error({unexpected_ipv6_probe_error, Reason})
+    end.
+
+with_ipv4_alias_support(IP, Fun) ->
+    case gen_tcp:listen(0, [binary, {reuseaddr, true}, {active, false}, {ip, IP}]) of
+        {ok, Probe} ->
+            ok = gen_tcp:close(Probe),
+            Fun();
+        {error, eaddrnotavail} ->
+            ok;
+        {error, Reason} ->
+            error({unexpected_ipv4_alias_probe_error, IP, Reason})
     end.
