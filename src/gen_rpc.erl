@@ -32,7 +32,7 @@
 -export([sbcast/2, sbcast/3]).
 
 %% Misc functions
--export([nodes/0]).
+-export([nodes/0, check_server_ports_available/0]).
 
 %% Set logger module
 -export([set_logger/1]).
@@ -147,6 +147,10 @@ sbcast(Nodes, Name, Msg) when is_list(Nodes), is_atom(Name) ->
 -spec nodes() -> list().
 nodes() ->
     gen_rpc_registry:nodes().
+
+-spec check_server_ports_available() -> ok | {error, [map()]}.
+check_server_ports_available() ->
+    gen_rpc_helper:check_server_ports_available().
 
 -spec set_logger(module()) -> ok.
 set_logger(Module) ->

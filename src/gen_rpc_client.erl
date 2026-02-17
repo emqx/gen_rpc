@@ -107,12 +107,13 @@ call(NodeOrTuple, M, F, A, RecvTimeout, SendTimeout) when ?is_node_or_tuple(Node
             catch
                 exit:{timeout,_Reason} -> {badrpc,timeout};
                 exit:{{shutdown, {badrpc, Reason}}, {gen_server, call, _}} ->
-                    %% the client gen_server stopped in handle_continue
+                    %% The client gen_server stopped in handle_continue.
                     {badrpc, Reason};
                 exit:{{shutdown, Reason}, {gen_server, call, _}} ->
-                    %% the client gen_server stopped with shutdown reason (non-badrpc)
+                    %% The client gen_server stopped with shutdown reason (non-badrpc).
                     {badrpc, Reason};
-                exit:OtherReason -> {badrpc, {unknown_error, OtherReason}}
+                exit:OtherReason ->
+                    {badrpc, {unknown_error, OtherReason}}
             end;
         {error, Reason} ->
             Reason
@@ -296,12 +297,14 @@ handle_continue({connect, Node, Port, Key}, #state{driver_mod = DriverMod, drive
                     {stop, {shutdown, Error}, State}
             end;
         {error, ReasonTuple} ->
-            ?log(error, "client_authentication_failed",
-                 #{driver => Driver,
-                   node => Node,
-                   port => Port,
-                   key => Key,
-                   cause => ReasonTuple}),
+            ?tp(error, client_authentication_failed, #{
+                driver => Driver,
+                node => Node,
+                port => Port,
+                key => Key,
+                cause => ReasonTuple,
+                domain => ?D_CLIENT
+            }),
             {stop, {shutdown, ReasonTuple}, State};
         {unreachable, Reason} ->
             %% This should be badtcp but to conform with

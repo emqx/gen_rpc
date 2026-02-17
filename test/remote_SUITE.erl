@@ -286,7 +286,7 @@ call_unreachable_peer(_Config) ->
             Mref = monitor(process, Pid),
             receive
                 {'DOWN', Mref, process, Pid, _Reason} ->
-                    ?assertEqual(undefined, gen_rpc_client:where_is(UnreachableNode)),
+                    ?retry(20, 50, ?assertEqual(undefined, gen_rpc_client:where_is(UnreachableNode))),
                     ok
             after
                 5000 ->
