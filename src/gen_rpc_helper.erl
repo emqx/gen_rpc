@@ -44,7 +44,8 @@
          get_inactivity_timeout/1,
          get_async_call_inactivity_timeout/0,
          get_listen_ip_config/0,
-         term_to_iovec/1]).
+         term_to_iovec/1,
+         check_server_ports_available/0]).
 
 %%% ===================================================
 %%% Public API
@@ -231,6 +232,15 @@ get_async_call_inactivity_timeout() ->
 get_user_tcp_opts(Type) ->
     get_user_tcp_opts(?USER_TCP_OPTS, Type).
 
+-spec check_server_ports_available() -> ok | {error, [map()]}.
+check_server_ports_available() ->
+    _ = application:load(?APP),
+    Endpoints = server_listen_endpoints(),
+    case find_port_conflicts(Endpoints) of
+        [] -> ok;
+        Conflicts -> {error, Conflicts}
+    end.
+
 %%% ===================================================
 %%% Private functions
 %%% ===================================================
@@ -250,9 +260,58 @@ get_client_config_from_map(Node, NodeConfig) ->
         {ok, {Driver,Port}} ->
             {Driver, Port};
         {ok, Port} ->
-            {ok, Driver} = application:get_env(?APP, default_client_driver),
+        {ok, Driver} = application:get_env(?APP, default_client_driver),
             {Driver, Port}
     end.
+
+server_listen_endpoints() ->
+    IP = probe_ip(),
+    lists:filtermap(
+        fun(Driver) ->
+            case is_driver_enabled(Driver) of
+                false ->
+                    false;
+                true ->
+                    {_DriverMod, Port, _ClosedMsg, _ErrorMsg} = get_server_driver_options(Driver),
+                    {true, #{driver => Driver, port => Port, ip => IP}}
+            end
+        end,
+        [tcp, ssl]
+    ).
+
+probe_ip() ->
+    case get_socket_ip() of
+        {_, IP} -> IP;
+        undefined -> undefined
+    end.
+
+find_port_conflicts(Endpoints) ->
+    lists:filtermap(
+        fun(Endpoint) ->
+            case probe_endpoint(Endpoint) of
+                ok -> false;
+                {error, Reason} -> {true, Endpoint#{reason => Reason}}
+            end
+        end,
+        Endpoints
+    ).
+
+probe_endpoint(#{port := Port, ip := IP}) ->
+    Opts = [binary, {reuseaddr, false}, {active, false}] ++ probe_ip_opts(IP),
+    case gen_tcp:listen(Port, Opts) of
+        {ok, Socket} ->
+            ok = gen_tcp:close(Socket),
+            ok;
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+probe_ip_opts(undefined) ->
+    [];
+probe_ip_opts(IP) when is_tuple(IP), tuple_size(IP) =:= 8 ->
+    [inet6, {ip, IP}];
+probe_ip_opts(IP) ->
+    [{ip, IP}].
 
 hybrid_proplist_compare({K1,_V1}, {K2,_V2}) ->
     K1 =< K2;
