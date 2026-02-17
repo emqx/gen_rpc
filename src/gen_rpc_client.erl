@@ -317,7 +317,7 @@ handle_continue({connect, Node, Port, Key}, #state{driver_mod = DriverMod, drive
 
 %% This is the actual CALL handler
 handle_call({{call,_M,_F,_A} = PacketTuple, SendTimeout}, Caller, #state{socket=Socket, driver=Driver, driver_mod=DriverMod} = State) ->
-    Packet = erlang:term_to_iovec({PacketTuple, Caller}),
+    Packet = gen_rpc_helper:term_to_iovec({PacketTuple, Caller}),
     ok = DriverMod:set_send_timeout(Socket, SendTimeout),
     case DriverMod:send(Socket, Packet) of
         {error, Reason} ->
@@ -344,7 +344,7 @@ handle_call(Msg, _Caller, #state{socket=Socket, driver=Driver} = State) ->
 
 %% This is the actual ASYNC CALL handler
 handle_cast({{async_call,_M,_F,_A} = PacketTuple, Caller, Ref}, #state{socket=Socket, driver=Driver, driver_mod=DriverMod} = State) ->
-    Packet = erlang:term_to_iovec({PacketTuple, {Caller,Ref}}),
+    Packet = gen_rpc_helper:term_to_iovec({PacketTuple, {Caller,Ref}}),
     ok = DriverMod:set_send_timeout(Socket, undefined),
     case DriverMod:send_async(Socket, Packet) of
         {error, Reason} ->
@@ -491,7 +491,7 @@ send_cast(PacketTuple, #state{socket=Socket, driver=Driver, driver_mod=DriverMod
                               , driver  => Driver
                               , socket  => gen_rpc_helper:socket_to_string(Socket)
                               }),
-    Packet = erlang:term_to_iovec(PacketTuple),
+    Packet = gen_rpc_helper:term_to_iovec(PacketTuple),
     ok = DriverMod:set_send_timeout(Socket, SendTimeout),
     case DriverMod:send_async(Socket, Packet) of
         {error, Reason} ->

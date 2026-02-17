@@ -282,7 +282,7 @@ call_worker(CallType, M, F, A, Caller, Socket, Driver, DriverMod) ->
 
 %% Handle a call worker message
 reply_call_result({_CallType,_Caller,_Res} = Payload, Socket, Driver, DriverMod) ->
-    case DriverMod:send(Socket, erlang:term_to_iovec(Payload)) of
+    case DriverMod:send(Socket, gen_rpc_helper:term_to_iovec(Payload)) of
         ok ->
             ok;
         {error, Reason} ->
