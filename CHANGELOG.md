@@ -2,6 +2,11 @@
 
 Below is a non-exhaustive list of changes between `gen_rpc` versions.
 
+## 3.6.0
+
+- Support compression when serializing Erlang term to binary.
+- Add `gen_rpc:check_server_ports_available/0` to help checking if `Address:Port` is in use.
+
 ## 3.5.1
 
 - Fix log 'domain' metadata.
