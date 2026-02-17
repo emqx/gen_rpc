@@ -131,9 +131,15 @@ t_auth_server_fail(Config) ->
                        end),
            ok = gen_rpc_test_helper:start_master(Driver),
            ok = gen_rpc_test_helper:start_slave(Driver),
-           ?assertMatch({badrpc, invalid_cookie}, gen_rpc:call(?SLAVE, ?MODULE, canary, []))
+           ?assert(
+               begin
+                   Res = gen_rpc:call(?SLAVE, ?MODULE, canary, []),
+                   Res =:= {badrpc, invalid_cookie} orelse match_unknown_call_error(Res)
+               end
+           )
        end,
        [ fun ?MODULE:prop_canary/1
+       , fun ?MODULE:prop_client_authentication_failed_trace/1
        ]).
 
 %% In this testcase we don't test auth, but the rest of the gen_rpc library.
@@ -287,6 +293,21 @@ canary() ->
 prop_canary(Trace) ->
     ?assertMatch([], ?of_kind(gen_rpc_canary, Trace)).
 
+prop_client_authentication_failed_trace(Trace) ->
+    Events = ?of_kind(client_authentication_failed, Trace),
+    ?assertMatch([_ | _], Events),
+    ?assert(
+        lists:any(
+            fun
+                (#{cause := {badrpc, invalid_cookie}}) ->
+                    true;
+                (_) ->
+                    false
+            end,
+            Events
+        )
+    ).
+
 prop_no_fallback(Trace) ->
     ?assertMatch([], ?of_kind([gen_rpc_insecure_fallback, gen_rpc_auth_cr_v1_fallback], Trace)).
 
@@ -336,3 +357,8 @@ has_fallback(Config) ->
     %% Insecure fallback can only be triggered by very ancient
     %% versions, skip it for 3.0+:
     atom_to_list(proplists:get_value(old_tag, Config)) < "2.99999999".
+
+match_unknown_call_error({badrpc, {unknown_error, _}}) ->
+    true;
+match_unknown_call_error(_) ->
+    false.
