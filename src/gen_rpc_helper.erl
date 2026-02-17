@@ -234,7 +234,6 @@ get_user_tcp_opts(Type) ->
 
 -spec check_server_ports_available() -> ok | {error, [map()]}.
 check_server_ports_available() ->
-    _ = application:load(?APP),
     Endpoints = server_listen_endpoints(),
     case find_port_conflicts(Endpoints) of
         [] -> ok;
