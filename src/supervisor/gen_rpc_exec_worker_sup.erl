@@ -9,12 +9,10 @@
 -include("logger.hrl").
 
 %%% API
--export([start_link/0, submit/4]).
+-export([start_link/0, submit/3]).
 
 %%% Supervisor callbacks
 -export([init/1]).
-
--define(FIRST_WORKER_INDEX, 1).
 
 %%% ===================================================
 %%% API
@@ -23,13 +21,13 @@
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
--spec submit(module(), atom(), list(), boolean()) -> ok.
-submit(M, F, A, PreserveOrder) ->
-    Name = gen_rpc_exec_worker:worker_name(worker_index(PreserveOrder)),
+-spec submit(module(), atom(), list()) -> ok.
+submit(M, F, A) ->
+    Name = gen_rpc_exec_worker:worker_name(random_worker_index()),
     case gen_rpc_registry:whereis_name(Name) of
         undefined ->
             ?log(notice, "event=exec_cast_worker_unavailable, name=~p", [Name]),
-            exec_cast(M, F, A, PreserveOrder);
+            exec_cast(M, F, A);
         Pid ->
             gen_server:cast(Pid, {exec_cast, M, F, A}),
             ok
@@ -45,14 +43,9 @@ init([]) ->
 %%% ===================================================
 %%% Internal functions
 %%% ===================================================
-%%% The `exec_cast/4` function is a fallback that executes the cast directly if the worker is unavailable.
+%%% The `exec_cast/3` function is a fallback that executes the cast directly if the worker is unavailable.
 %%% Usually happens when relup failed to start the worker pool.
-exec_cast(M, F, A, _PreserveOrder = true) ->
-    {Pid, MRef} = erlang:spawn_monitor(M, F, A),
-    receive
-        {'DOWN', MRef, process, Pid, _} -> ok
-    end;
-exec_cast(M, F, A, _PreserveOrder = false) ->
+exec_cast(M, F, A) ->
     _ = erlang:spawn(M, F, A),
     ok.
 
@@ -62,11 +55,6 @@ worker_spec(Index) ->
 
 worker_count() ->
     erlang:system_info(schedulers).
-
-worker_index(true) ->
-    ?FIRST_WORKER_INDEX;
-worker_index(false) ->
-    random_worker_index().
 
 random_worker_index() ->
     case worker_count() of

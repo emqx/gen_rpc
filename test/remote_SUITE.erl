@@ -118,6 +118,12 @@ cast_anonymous_function(_Config) ->
 ord_cast_anonymous_function(_Config) ->
     true = gen_rpc:ordered_cast({?SLAVE, 1}, erlang, apply, [fun() -> os:timestamp() end, []]).
 
+ordered_cast_blocks_following_call(_Config) ->
+    Key = erlang:unique_integer([monotonic, positive]),
+    ok = rpc:call(?SLAVE, gen_rpc_test_helper, clear_stored, [Key]),
+    true = gen_rpc:ordered_cast({?SLAVE, 1}, gen_rpc_test_helper, delayed_store, [Key, done, 200]),
+    done = gen_rpc:call({?SLAVE, 1}, gen_rpc_test_helper, read_stored, [Key]).
+
 cast_mfa_undef(_Config) ->
     true = gen_rpc:cast(?SLAVE, os, timestamp_undef, []).
 

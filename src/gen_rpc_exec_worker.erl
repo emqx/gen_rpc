@@ -53,9 +53,9 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%% ===================================================
 execute_cast(M, F, A) ->
-    try erlang:apply(M, F, A) of
-        _Result ->
-            ok
+    try
+        _ = erlang:apply(M, F, A),
+        ok
     catch
         Class:Reason:Stacktrace ->
             ?log(error,

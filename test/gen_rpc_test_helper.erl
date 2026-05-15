@@ -27,7 +27,10 @@
          spawn_short_running/0,
          stub_function/0,
          ping/1,
-         test_call/1
+         test_call/1,
+         delayed_store/3,
+         read_stored/1,
+         clear_stored/1
         ]).
 
 %%% ===================================================
@@ -177,3 +180,15 @@ ping({Node, Process, Msg}) ->
 
 test_call(SeqNo) ->
     ?tp(do_test_call, #{seqno => SeqNo}).
+
+delayed_store(Key, Value, Delay) ->
+    ok = timer:sleep(Delay),
+    persistent_term:put({?MODULE, Key}, Value),
+    ok.
+
+read_stored(Key) ->
+    persistent_term:get({?MODULE, Key}, undefined).
+
+clear_stored(Key) ->
+    persistent_term:erase({?MODULE, Key}),
+    ok.
