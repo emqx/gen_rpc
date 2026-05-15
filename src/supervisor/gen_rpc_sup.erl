@@ -11,7 +11,7 @@
 -behaviour(supervisor).
 
 %%% Supervisor functions
--export([start_link/0]).
+-export([start_link/0, ensure_exec_worker_sup_started/0]).
 
 %%% Supervisor callbacks
 -export([init/1]).
@@ -23,16 +23,42 @@
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
+-spec ensure_exec_worker_sup_started() -> ok.
+ensure_exec_worker_sup_started() ->
+    try
+        case supervisor:start_child(?MODULE, exec_worker_sup_child_spec()) of
+            {ok, _Pid} ->
+                ok;
+            {ok, _Pid, _Info} ->
+                ok;
+            {error, {already_started, _Pid}} ->
+                ok;
+            {error, already_present} ->
+                ok;
+            {error, _Reason} ->
+                ok
+        end
+    catch
+        _:_ ->
+            ok
+    end.
+
 %%% ===================================================
 %%% Supervisor callbacks
 %%% ===================================================
 init([]) ->
     {ok, {{one_for_one, 100, 1}, [
         {gen_rpc_registry, {gen_rpc_registry, start_link, []}, permanent, 5000, worker, [gen_rpc_registry]},
-        {gen_rpc_exec_worker_sup, {gen_rpc_exec_worker_sup, start_link, []}, permanent, 5000, supervisor, [gen_rpc_exec_worker_sup]},
+        exec_worker_sup_child_spec(),
         {gen_rpc_server_tcp, {gen_rpc_server,start_link,[tcp]}, permanent, 5000, worker, [gen_rpc_server]},
         {gen_rpc_server_ssl, {gen_rpc_server,start_link,[ssl]}, permanent, 5000, worker, [gen_rpc_server]},
         {gen_rpc_acceptor_sup, {gen_rpc_acceptor_sup,start_link, []}, permanent, 5000, supervisor, [gen_rpc_acceptor_sup]},
         {gen_rpc_dispatcher, {gen_rpc_dispatcher,start_link, []}, permanent, 5000, worker, [gen_rpc_dispatcher]},
         {gen_rpc_client_sup, {gen_rpc_client_sup,start_link, []}, permanent, 5000, supervisor, [gen_rpc_client_sup]}
     ]}}.
+
+%%% ===================================================
+%%% Private functions
+%%% ===================================================
+exec_worker_sup_child_spec() ->
+    {gen_rpc_exec_worker_sup, {gen_rpc_exec_worker_sup, start_link, []}, permanent, 5000, supervisor, [gen_rpc_exec_worker_sup]}.
