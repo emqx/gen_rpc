@@ -340,13 +340,8 @@ handle_cast(M, F, A, Ordered, #state{socket=Socket, driver=Driver, peer=Peer, co
             ?log(debug, "event=request_not_allowed driver=~s socket=\"~s\" control=~s method=cast module=~s",[Driver, gen_rpc_helper:socket_to_string(Socket), Control, RealM])
     end.
 
-exec_cast(M, F, A, _PreserveOrder = true) ->
-    {Pid, MRef} = erlang:spawn_monitor(M, F, A),
-    receive
-        {'DOWN', MRef, process, Pid, _} -> ok
-    end;
-exec_cast(M, F, A, _PreserveOrder = false) ->
-    _ = erlang:spawn(M, F, A),
+exec_cast(M, F, A, PreserveOrder) ->
+    ok = gen_rpc_exec_worker_sup:submit(M, F, A, PreserveOrder),
     ok.
 
 reply_immediately(Payload, #state{driver_mod = DriverMod, driver = Driver, socket = Socket}) ->

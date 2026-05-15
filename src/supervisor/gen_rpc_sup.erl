@@ -29,6 +29,7 @@ start_link() ->
 init([]) ->
     {ok, {{one_for_one, 100, 1}, [
         {gen_rpc_registry, {gen_rpc_registry, start_link, []}, permanent, 5000, worker, [gen_rpc_registry]},
+        {gen_rpc_exec_worker_sup, {gen_rpc_exec_worker_sup, start_link, []}, permanent, 5000, supervisor, [gen_rpc_exec_worker_sup]},
         {gen_rpc_server_tcp, {gen_rpc_server,start_link,[tcp]}, permanent, 5000, worker, [gen_rpc_server]},
         {gen_rpc_server_ssl, {gen_rpc_server,start_link,[ssl]}, permanent, 5000, worker, [gen_rpc_server]},
         {gen_rpc_acceptor_sup, {gen_rpc_acceptor_sup,start_link, []}, permanent, 5000, supervisor, [gen_rpc_acceptor_sup]},
