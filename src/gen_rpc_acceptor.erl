@@ -341,12 +341,18 @@ handle_cast(M, F, A, Ordered, #state{socket=Socket, driver=Driver, peer=Peer, co
     end.
 
 exec_cast(M, F, A, _PreserveOrder = true) ->
-    {Pid, MRef} = erlang:spawn_monitor(M, F, A),
-    receive
-        {'DOWN', MRef, process, Pid, _} -> ok
-    end;
+    %% Execute on the exec worker pinned to this acceptor (a connection) and
+    %% wait for it to finish, so casts on the same connection are executed in
+    %% arrival order. Reusing the pre-created worker pool avoids spawning a
+    %% process per cast, unlike the previous spawn_monitor-based version.
+    gen_rpc_exec_worker_sup:submit_ordered(exec_worker_key(), M, F, A);
 exec_cast(M, F, A, _PreserveOrder = false) ->
     ok = gen_rpc_exec_worker_sup:submit(M, F, A).
+
+%% Key that pins all ordered casts of this acceptor (a connection) to a single
+%% exec worker, giving FIFO execution per connection.
+exec_worker_key() ->
+    {acceptor, self()}.
 
 reply_immediately(Payload, #state{driver_mod = DriverMod, driver = Driver, socket = Socket}) ->
     reply_call_result(Payload, Socket, Driver, DriverMod),
