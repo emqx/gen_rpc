@@ -31,6 +31,11 @@ worker_name(Index) when is_integer(Index), Index > 0 ->
 init(Index) ->
     {ok, Index}.
 
+%% Synchronous execution of an ordered cast. The caller (the acceptor) blocks
+%% until this returns, so casts on the same worker run one after another.
+handle_call({exec_cast, M, F, A}, _From, State) ->
+    execute_cast(M, F, A),
+    {reply, ok, State};
 handle_call(_Request, _From, State) ->
     {reply, {error, unsupported_call}, State}.
 
