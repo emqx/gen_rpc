@@ -51,8 +51,19 @@ submit_ordered(Key, M, F, A) ->
             execute_inline(M, F, A);
         Pid ->
             try
-                gen_server:call(Pid, {exec_cast, M, F, A}, infinity),
-                ok
+                case gen_server:call(Pid, {exec_cast, M, F, A}, infinity) of
+                    ok ->
+                        ok;
+                    Reply ->
+                        %% e.g. an older worker running pre-pool code replies
+                        %% `{error, unsupported_call}' without executing the
+                        %% cast (mixed-version hot upgrade); run it inline so
+                        %% it is not silently dropped.
+                        ?log(error,
+                             "event=exec_ordered_cast_rejected reply=~p",
+                             [Reply]),
+                        execute_inline(M, F, A)
+                end
             catch
                 Class:Reason:Stack ->
                     ?log(error,
