@@ -2,6 +2,18 @@
 
 Below is a non-exhaustive list of changes between `gen_rpc` versions.
 
+## 4.0.0
+
+- Breaking: remove the insecure authentication fallback.
+  - The `insecure_auth_fallback_allowed` application environment key no longer exists.
+  - A client no longer retries a failed challenge-response authentication by sending the raw
+    Erlang cookie to the peer. A server no longer accepts the old cookie-based
+    authentication packet.
+  - All nodes must run a version that speaks challenge-response authentication
+    (3.0.0 or later). A 4.x node does not fall back for an old peer, so a cluster that
+    still contains pre-3.0.0 nodes must upgrade them to a 3.x release before upgrading
+    to 4.0.0.
+
 ## 3.6.0
 
 - Support compression when serializing Erlang term to binary.
