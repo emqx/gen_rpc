@@ -216,58 +216,136 @@ t_cr_invalid_server(Config) ->
        , fun ?MODULE:prop_no_fallback/1
        ]).
 
-%% Compatibility (happy case)
-t_compat_old_server_ok(Config) ->
+%% Regression test for the removed insecure auth fallback: the peer
+%% closes the connection during challenge-response.  Before 4.0.0 this
+%% made the client (with `insecure_auth_fallback_allowed' set) open a
+%% second connection and send the raw cookie.  Capture every byte the
+%% client sends and assert the cookie is never transmitted.
+t_no_cookie_on_wire_peer_closes(Config) ->
+    no_cookie_on_wire(Config, close_on_challenge, {badrpc, {badtcp, closed}}).
+
+%% Regression test for the removed insecure auth fallback: the peer
+%% rejects challenge-response with a bad response (the other condition
+%% that used to trigger the fallback).  Capture every byte the client
+%% sends and assert the cookie is never transmitted.
+t_no_cookie_on_wire_peer_rejects(Config) ->
+    no_cookie_on_wire(Config, reject_challenge, {badrpc, invalid_cookie}).
+
+no_cookie_on_wire(Config, Mode, ExpectedResult) ->
     Driver = gen_rpc_test_helper:get_driver_from_config(Config),
-    application:set_env(?APP, insecure_auth_fallback_allowed, true),
+    Cookie = <<"super_secret_cookie_must_not_leak">>,
+    ?check_trace(
+       #{timetrap => 5000},
+       begin
+           ok = gen_rpc_test_helper:start_master(Driver),
+           ok = application:set_env(?APP, secret_cookie, Cookie),
+           {FakePeer, Port} = start_fake_peer(Driver, Mode),
+           %% Point the client configuration for ?SLAVE at the fake peer:
+           ok = application:set_env(?APP, client_config_per_node,
+                                    {internal, #{?SLAVE => Port}}),
+           Result = gen_rpc:call(?SLAVE, ?MODULE, canary, []),
+           {Connections, Packets} = stop_fake_peer(FakePeer),
+           %% The core property: no captured byte sequence contains
+           %% the cookie:
+           lists:foreach(
+             fun(Packet) ->
+                     ?assertEqual(nomatch, binary:match(Packet, Cookie), Packet)
+             end,
+             Packets),
+           %% The call failed.  The client process may stop before the
+           %% caller's request reaches it; the error is then wrapped
+           %% in unknown_error:
+           ?assert(Result =:= ExpectedResult orelse match_unknown_call_error(Result),
+                   {unexpected_result, Result}),
+           %% The client must not open a second connection to retry
+           %% with a downgraded protocol:
+           ?assertEqual(1, Connections),
+           %% The only packet the client sends is the CR challenge:
+           ?assertMatch([_], Packets),
+           [ChallengePacket] = Packets,
+           ?assertMatch({gen_rpc_authenticate_c, _},
+                        binary_to_term(ChallengePacket))
+       end,
+       [ fun ?MODULE:prop_canary/1
+       , fun ?MODULE:prop_no_fallback/1
+       ]).
+
+%% Compatibility: a peer that speaks challenge-response (gen_rpc 3.0.0
+%% and later) authenticates normally.  A peer that predates
+%% challenge-response must fail to authenticate: the insecure auth
+%% fallback was removed in 4.0.0, so this node never reveals the
+%% cookie to such a peer.
+t_compat_old_server(Config) ->
+    Driver = gen_rpc_test_helper:get_driver_from_config(Config),
     ?check_trace(
        #{timetrap => 5000},
        begin
            ok = gen_rpc_test_helper:start_master(Driver),
            ok = gen_rpc_test_helper:start_slave(Driver, old_path(Config)),
-           ?assertMatch(?SLAVE, gen_rpc:call(?SLAVE, erlang, node, [])),
-           Config
+           case peer_speaks_cr(Config) of
+               true ->
+                   ?assertMatch(?SLAVE, gen_rpc:call(?SLAVE, erlang, node, []));
+               false ->
+                   ?assertMatch({badrpc, _}, gen_rpc:call(?SLAVE, ?MODULE, canary, []))
+           end
        end,
-       [fun ?MODULE:prop_fallback/2]).
+       [ fun ?MODULE:prop_canary/1
+       , fun ?MODULE:prop_no_insecure_fallback/1
+       ]).
 
-%% Compatibility (happy case)
-t_compat_old_client_ok(Config) ->
+%% Compatibility: same as t_compat_old_server, but the old peer is the
+%% client.  An old client that sends the legacy cookie packet must be
+%% rejected.
+t_compat_old_client(Config) ->
     Driver = gen_rpc_test_helper:get_driver_from_config(Config),
-    application:set_env(?APP, insecure_auth_fallback_allowed, true),
     ?check_trace(
        #{timetrap => 5000},
        begin
            ok = gen_rpc_test_helper:start_master(Driver),
            ok = gen_rpc_test_helper:start_slave(Driver, old_path(Config)),
-           Result = erpc:call(?SLAVE, gen_rpc, call, [?MASTER, erlang, node, []]),
-           ?assertMatch(?MASTER, Result),
+           Result = erpc:call(?SLAVE, gen_rpc, call, [?MASTER, ?MODULE, canary, []]),
+           case peer_speaks_cr(Config) of
+               true ->
+                   ?assertMatch(canary_is_dead, Result);
+               false ->
+                   %% The 2.8.1 client reports the closed connection
+                   %% as {badtcp, closed}:
+                   ?assertMatch({Err, _} when Err =:= badrpc orelse Err =:= badtcp,
+                                Result)
+           end,
            Config
        end,
-       [fun ?MODULE:prop_fallback/2]).
+       [ fun ?MODULE:prop_compat_client_canary/2
+       , fun ?MODULE:prop_no_insecure_fallback/1
+       ]).
 
-%% Compatibility (bad cookie)
+%% Compatibility (bad cookie): authentication must fail for every peer
+%% version.
 t_compat_old_server_invalid_cookie(Config) ->
     Driver = gen_rpc_test_helper:get_driver_from_config(Config),
-    has_fallback(Config) andalso
-        application:set_env(?APP, insecure_auth_fallback_allowed, true),
     ?check_trace(
        #{timetrap => 5000},
        begin
            application:set_env(?APP, secret_cookie, <<"wrong_cookie">>),
            ok = gen_rpc_test_helper:start_master(Driver),
            ok = gen_rpc_test_helper:start_slave(Driver, old_path(Config)),
-           ?assertMatch({badrpc, invalid_cookie}, gen_rpc:call(?SLAVE, ?MODULE, canary, [])),
-           Config
+           case peer_speaks_cr(Config) of
+               true ->
+                   ?assertMatch({badrpc, invalid_cookie},
+                                gen_rpc:call(?SLAVE, ?MODULE, canary, []));
+               false ->
+                   ?assertMatch({badrpc, _},
+                                gen_rpc:call(?SLAVE, ?MODULE, canary, []))
+           end
        end,
        [ fun ?MODULE:prop_canary/1
-       , fun ?MODULE:prop_fallback/2
+       , fun ?MODULE:prop_no_insecure_fallback/1
        ]).
 
-%% Compatibility (bad cookie)
+%% Compatibility (bad cookie): same as above, but the old peer is the
+%% client.
 t_compat_old_client_invalid_cookie(Config) ->
     Driver = gen_rpc_test_helper:get_driver_from_config(Config),
-    has_fallback(Config) andalso
-        application:set_env(?APP, insecure_auth_fallback_allowed, true),
     ?check_trace(
        #{timetrap => 5000},
        begin
@@ -275,11 +353,18 @@ t_compat_old_client_invalid_cookie(Config) ->
            ok = gen_rpc_test_helper:start_master(Driver),
            ok = gen_rpc_test_helper:start_slave(Driver, old_path(Config)),
            Result = erpc:call(?SLAVE, gen_rpc, call, [?MASTER, ?MODULE, canary, []]),
-           ?assertMatch({badrpc, invalid_cookie}, Result),
-           Config
+           case peer_speaks_cr(Config) of
+               true ->
+                   ?assertMatch({badrpc, invalid_cookie}, Result);
+               false ->
+                   %% The 2.8.1 client reports the closed connection
+                   %% as {badtcp, closed}:
+                   ?assertMatch({Err, _} when Err =:= badrpc orelse Err =:= badtcp,
+                                Result)
+           end
        end,
        [ fun ?MODULE:prop_canary/1
-       , fun ?MODULE:prop_fallback/2
+       , fun ?MODULE:prop_no_insecure_fallback/1
        ]).
 
 %%% ===================================================
@@ -311,13 +396,147 @@ prop_client_authentication_failed_trace(Trace) ->
 prop_no_fallback(Trace) ->
     ?assertMatch([], ?of_kind([gen_rpc_insecure_fallback, gen_rpc_auth_cr_v1_fallback], Trace)).
 
-prop_fallback(Config, Trace) ->
-    case has_fallback(Config) of
+%% The insecure auth fallback was removed in 4.0.0.  The trace point is
+%% gone from the code; this property is a tripwire in case it is ever
+%% reintroduced.
+prop_no_insecure_fallback(Trace) ->
+    ?assertMatch([], ?of_kind(gen_rpc_insecure_fallback, Trace)).
+
+prop_compat_client_canary(Config, Trace) ->
+    case peer_speaks_cr(Config) of
         true ->
-            ?assertMatch([_|_], ?of_kind(gen_rpc_insecure_fallback, Trace));
+            ?assertMatch([_], ?of_kind(gen_rpc_canary, Trace));
         false ->
-            true
+            ?assertMatch([], ?of_kind(gen_rpc_canary, Trace))
     end.
+
+%%% ===================================================
+%%% Fake peer: captures every byte the client sends
+%%% ===================================================
+
+%% Start a peer that speaks just enough of the protocol to trigger the
+%% two conditions that used to activate the insecure auth fallback,
+%% while capturing every packet the client sends:
+%%
+%% - close_on_challenge: receive the CR challenge, then close the
+%%   connection.
+%% - reject_challenge: receive the CR challenge, then answer it with a
+%%   challenge-response computed from a wrong secret, so the client
+%%   fails with `invalid_cookie'.
+%%
+%% Each accepted connection is reported to the test process as a
+%% `{fake_peer_connection, Pid}' message and each received packet as a
+%% `{fake_peer_packet, Pid, Packet}' message.
+start_fake_peer(Driver, Mode) ->
+    Parent = self(),
+    Pid = spawn_link(fun() -> fake_peer_init(Driver, Mode, Parent) end),
+    receive
+        {fake_peer_up, Pid, Port} ->
+            {Pid, Port}
+    after 5000 ->
+            error(fake_peer_start_timeout)
+    end.
+
+stop_fake_peer(Pid) ->
+    unlink(Pid),
+    MRef = monitor(process, Pid),
+    exit(Pid, kill),
+    receive
+        {'DOWN', MRef, process, Pid, _} ->
+            ok
+    end,
+    collect_fake_peer_events(Pid, 0, []).
+
+collect_fake_peer_events(Pid, Connections, Packets) ->
+    receive
+        {fake_peer_connection, Pid} ->
+            collect_fake_peer_events(Pid, Connections + 1, Packets);
+        {fake_peer_packet, Pid, Packet} ->
+            collect_fake_peer_events(Pid, Connections, Packets ++ [Packet])
+    after 0 ->
+            {Connections, Packets}
+    end.
+
+fake_peer_init(tcp, Mode, Parent) ->
+    {ok, LSock} = gen_tcp:listen(0, fake_peer_listen_opts()),
+    {ok, Port} = inet:port(LSock),
+    Parent ! {fake_peer_up, self(), Port},
+    fake_peer_accept_loop(tcp, LSock, Mode, Parent);
+fake_peer_init(ssl, Mode, Parent) ->
+    %% Present the real slave certificate, so the client's peer
+    %% verification succeeds and authentication proceeds to the
+    %% challenge-response stage:
+    Prefix = code:priv_dir(?APP),
+    CertFile = filename:join([Prefix, "ssl", atom_to_list(?SLAVE)]),
+    CaFile = filename:join([Prefix, "ssl", "ca.cert.pem"]),
+    Opts = [ {certfile, CertFile ++ ".cert.pem"}
+           , {keyfile, CertFile ++ ".key.pem"}
+           , {cacertfile, CaFile}
+           , {verify, verify_none}
+           | fake_peer_listen_opts()],
+    {ok, LSock} = ssl:listen(0, Opts),
+    {ok, {_Ip, Port}} = ssl:sockname(LSock),
+    Parent ! {fake_peer_up, self(), Port},
+    fake_peer_accept_loop(ssl, LSock, Mode, Parent).
+
+fake_peer_listen_opts() ->
+    [binary, {packet, 4}, {active, false}, {reuseaddr, true}, {ip, {127, 0, 0, 1}}].
+
+fake_peer_accept_loop(Driver, LSock, Mode, Parent) ->
+    case fake_peer_accept(Driver, LSock) of
+        {ok, Socket} ->
+            Parent ! {fake_peer_connection, self()},
+            fake_peer_serve(Driver, Socket, Mode, Parent),
+            fake_peer_accept_loop(Driver, LSock, Mode, Parent);
+        {error, _} ->
+            ok
+    end.
+
+fake_peer_accept(tcp, LSock) ->
+    gen_tcp:accept(LSock);
+fake_peer_accept(ssl, LSock) ->
+    case ssl:transport_accept(LSock) of
+        {ok, TSock} ->
+            ssl:handshake(TSock, 5000);
+        Error ->
+            Error
+    end.
+
+fake_peer_serve(Driver, Socket, Mode, Parent) ->
+    case fake_peer_recv(Driver, Socket) of
+        {ok, Packet} ->
+            Parent ! {fake_peer_packet, self(), Packet},
+            case Mode of
+                close_on_challenge ->
+                    fake_peer_close(Driver, Socket);
+                reject_challenge ->
+                    %% Answer the challenge with a response computed
+                    %% from a wrong secret (matching the record format
+                    %% of gen_rpc_auth):
+                    Reply = term_to_binary({gen_rpc_authenticate_cr,
+                                            crypto:strong_rand_bytes(32),
+                                            crypto:strong_rand_bytes(8)}),
+                    _ = fake_peer_send(Driver, Socket, Reply),
+                    fake_peer_serve(Driver, Socket, Mode, Parent)
+            end;
+        {error, _} ->
+            fake_peer_close(Driver, Socket)
+    end.
+
+fake_peer_recv(tcp, Socket) ->
+    gen_tcp:recv(Socket, 0, 5000);
+fake_peer_recv(ssl, Socket) ->
+    ssl:recv(Socket, 0, 5000).
+
+fake_peer_send(tcp, Socket, Data) ->
+    gen_tcp:send(Socket, Data);
+fake_peer_send(ssl, Socket, Data) ->
+    ssl:send(Socket, Data).
+
+fake_peer_close(tcp, Socket) ->
+    gen_tcp:close(Socket);
+fake_peer_close(ssl, Socket) ->
+    ssl:close(Socket).
 
 old_path(Config) ->
     OldRelDir = proplists:get_value(old_rel_dir, Config),
@@ -353,10 +572,11 @@ build_old_rel(Tag, Config) ->
     end,
     filename:join(DataDir, "gen_rpc/_build/default/lib/gen_rpc/ebin").
 
-has_fallback(Config) ->
-    %% Insecure fallback can only be triggered by very ancient
-    %% versions, skip it for 3.0+:
-    atom_to_list(proplists:get_value(old_tag, Config)) < "2.99999999".
+peer_speaks_cr(Config) ->
+    %% Challenge-response authentication was introduced in 3.0.0.
+    %% Older peers only speak the insecure cookie protocol and cannot
+    %% authenticate with this version.
+    atom_to_list(proplists:get_value(old_tag, Config)) >= "3".
 
 match_unknown_call_error({badrpc, {unknown_error, _}}) ->
     true;

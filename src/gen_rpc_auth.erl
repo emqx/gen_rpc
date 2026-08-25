@@ -81,35 +81,15 @@
               | {error, auth_error()}
               | {unreachable, _Reason}.
 connect_with_auth(Driver, Node, Port) ->
-    Fallback = insecure_fallback_allowed(),
-    case connect_with_auth(Driver, Node, Port, fun authenticate_server_cr/3) of
-        {ok, Socket} ->
-            {ok, Socket};
-        Err when Fallback, Err =:= {error, {badtcp, closed}} orelse
-                           Err =:= {error, ?UNAUTHORIZED} ->
-            ?tp(warning, gen_rpc_insecure_fallback, #{peer => {Node, Port},
-                                                      role => client,
-                                                      domain => ?D_AUTH
-                                                     }),
-            connect_with_auth(Driver, Node, Port, fun authenticate_server_insecure/3);
-        Result ->
-            Result
-    end.
+    connect_with_auth(Driver, Node, Port, fun authenticate_server_cr/3).
 
 -spec authenticate_client(module(), term(), tuple()) -> ok | {error, auth_error()}.
 authenticate_client(Driver, Socket, Peer) ->
     ok = Driver:set_send_timeout(Socket, gen_rpc_helper:get_send_timeout(undefined)),
     RecvTimeout = gen_rpc_helper:get_authentication_timeout(),
-    Fallback = insecure_fallback_allowed(),
     case Driver:recv(Socket, 0, RecvTimeout) of
         {ok, Data} ->
-            case authenticate_client_cr(Driver, Socket, Data) of
-                {error, ?BADPACKET} when Fallback ->
-                    ?tp(warning, gen_rpc_insecure_fallback, #{peer => Peer, role => server, domain => ?D_AUTH}),
-                    authenticate_client_insecure(Driver, Socket, Peer, Data);
-                Result ->
-                    Result
-            end;
+            authenticate_client_cr(Driver, Socket, Data);
         {error, Reason} ->
             ?tp(error, gen_rpc_client_auth_timeout, #{peer => Peer, error => Reason, domain => ?D_AUTH}),
             {error, {badtcp, Reason}}
@@ -174,119 +154,6 @@ authenticate_client_cr(Driver, Socket, Data) ->
     catch
         {badtcp, Action, Meta, Reason} ->
             ?tp(error, gen_rpc_authentication_badtcp,
-                #{ packet => Meta
-                 , reason => Reason
-                 , peer => Peer
-                 , socket => Socket
-                 , action => Action
-                 , domain => ?D_AUTH
-                 }),
-            {error, {badtcp, Reason}}
-    end.
-
-%%================================================================================
-%% Insecure fallback
-%%================================================================================
-
-%% TODO: Drop these functions in the next major release
-
--spec authenticate_server_insecure(module(), node(), term()) -> ok | {error, auth_error()}.
-authenticate_server_insecure(Driver, _Node, Socket) ->
-    Peer = Driver:get_peer(Socket),
-    try
-        %% Send cookie to the remote server:
-        Cookie = get_cookie_atom(),
-        Packet = case Driver of
-                     gen_rpc_driver_tcp ->
-                         erlang:term_to_binary({gen_rpc_authenticate_connection, Cookie});
-                     gen_rpc_driver_ssl ->
-                         %% Just another quirk of the old auth process...
-                         erlang:term_to_binary({gen_rpc_authenticate_connection, node(), Cookie})
-                 end,
-        ?tp(gen_rpc_auth_server_insecure_send, #{socket => Socket}),
-        send(Driver, Socket, Packet, insecure_cookie),
-        %% Wait for the reply:
-        RecvPacket = recv(Driver, Socket, insecure_response),
-        ?tp(gen_rpc_auth_server_insecure_recv, #{socket => Socket, response => RecvPacket}),
-        try erlang:binary_to_term(RecvPacket, [safe]) of
-            gen_rpc_connection_authenticated ->
-                ok;
-            {gen_rpc_connection_rejected, invalid_cookie} ->
-                ?log(error, "authentication_rejected",
-                     #{socket => gen_rpc_helper:socket_to_string(Socket),
-                       cause => invalid_cookie}),
-                {error, ?UNAUTHORIZED};
-            _Else ->
-                ?log(error, "authentication_reception_error",
-                     #{socket => gen_rpc_helper:socket_to_string(Socket),
-                       cause => invalid_payload}),
-                {error, ?BADPACKET}
-        catch
-            error:badarg ->
-                {error, ?BADPACKET}
-        end
-    catch
-        {badtcp, Action, Meta, Reason} ->
-            ?tp(error, gen_rpc_server_auth_fallback_badtcp,
-                #{ packet => Meta
-                 , reason => Reason
-                 , peer => Peer
-                 , socket => Socket
-                 , action => Action
-                 , domain => ?D_AUTH
-                 }),
-            {error, {badtcp, Reason}}
-    end.
-
--spec authenticate_client_insecure(module(), port(), tuple(), binary()) -> ok | {error, auth_error()}.
-authenticate_client_insecure(Driver, Socket, Peer, Data) ->
-    Cookie = get_cookie_atom(),
-    CheckResult =
-        try erlang:binary_to_term(Data, [safe]) of
-            {gen_rpc_authenticate_connection, Cookie} ->
-                ok;
-            {gen_rpc_authenticate_connection, _Node, Cookie} ->
-                %% Old authentication packet sent by SSL driver
-                ok;
-            {gen_rpc_authenticate_connection, _InvalidCookie} ->
-                %% Note: this case may not actually trigger, since
-                %% `binary_to_term' runs with `safe' option, so
-                %% instead of `invalid_cookie' the error code becomes
-                %% `corrupt_data'. But it's more secure, since it
-                %% prevents atom table DOS attack.
-                invalid_cookie;
-            {gen_rpc_authenticate_connection, _Node, _InvalidCookie} ->
-                %% Note: same problem as above
-                %%
-                %% Old authentication packet sent by SSL driver
-                invalid_cookie;
-            _ ->
-                erroneous_data
-        catch
-            error:badarg ->
-                corrupt_data
-        end,
-    LogLevel = case CheckResult of
-                   ok -> debug;
-                   _  -> error
-               end,
-    ?tp(LogLevel, gen_rpc_client_auth_fallback, #{peer => Peer, socket => Socket, result => CheckResult, domain => ?D_AUTH}),
-    try
-        case CheckResult of
-            ok ->
-                Packet = erlang:term_to_binary(gen_rpc_connection_authenticated),
-                send(Driver, Socket, Packet, reply),
-                ok;
-            invalid_cookie ->
-                Packet = erlang:term_to_binary({gen_rpc_connection_rejected, invalid_cookie}),
-                send(Driver, Socket, Packet, reply),
-                {error, ?UNAUTHORIZED};
-            Err ->
-                {error, Err}
-        end
-    catch
-        {badtcp, Action, Meta, Reason} ->
-            ?tp(error, gen_rpc_client_auth_fallback_badtcp,
                 #{ packet => Meta
                  , reason => Reason
                  , peer => Peer
@@ -494,23 +361,12 @@ do_compare_binaries([A|L1], [B|L2], Acc) ->
 do_compare_binaries(_, _, Acc) ->
     Acc.
 
-insecure_fallback_allowed() ->
-    application:get_env(gen_rpc, insecure_auth_fallback_allowed, false).
-
 get_cookie() ->
     case application:get_env(gen_rpc, secret_cookie) of
         {ok, Cookie} ->
             Cookie;
         undefined ->
             atom_to_binary(erlang:get_cookie(), utf8)
-    end.
-
-get_cookie_atom() ->
-    case application:get_env(gen_rpc, secret_cookie) of
-        {ok, Cookie} ->
-            binary_to_atom(Cookie, utf8);
-        undefined ->
-            erlang:get_cookie()
     end.
 
 %%================================================================================
