@@ -9,6 +9,8 @@
 
 %%% CT Macros
 -include_lib("test/include/ct.hrl").
+-include_lib("snabbkaffe/include/snabbkaffe.hrl").
+-include_lib("stdlib/include/assert.hrl").
 
 %%% No need to export anything, everything is automatically exported
 %%% as part of the test profile
@@ -204,6 +206,36 @@ abcast_with_unregistered_name(_Config) ->
     after
         2000 -> ok
     end.
+
+abcast_preserves_order(_Config) ->
+    Count = 10000,
+    true = erlang:register(test_process_123, self()),
+    ok = rpc:call(?SLAVE, gen_rpc_test_helper, abcast_sequence, [[?MASTER], test_process_123, Count]),
+    ok = gen_rpc_test_helper:receive_sequence(Count),
+    true = erlang:unregister(test_process_123).
+
+%% Hold the first abcast inside gen_rpc and check the second can't overtake it
+abcast_preserves_order_when_first_is_held(_Config) ->
+    true = erlang:register(test_process_123, self()),
+    First = {abcast, test_process_123, {abcast_seq, 1}},
+    Second = {abcast, test_process_123, {abcast_seq, 2}},
+    ?check_trace(
+        begin
+            ?force_ordering(#{?snk_kind := release_first_abcast},
+                            #{?snk_kind := gen_rpc_input, input := First}),
+            ok = erpc:cast(?SLAVE, gen_rpc_test_helper, abcast_sequence, [[?MASTER], test_process_123, 2]),
+            Overtaken = receive {abcast_seq, _} = Msg -> Msg after 500 -> none end,
+            ?tp(release_first_abcast, #{}),
+            ?assertEqual(none, Overtaken),
+            ok = gen_rpc_test_helper:receive_sequence(2)
+        end,
+        fun(Trace) ->
+            %% The second abcast only enters gen_rpc after the first one is released
+            ?assert(?strict_causality(#{?snk_kind := release_first_abcast},
+                                      #{?snk_kind := gen_rpc_input, input := Second},
+                                      Trace))
+        end),
+    true = erlang:unregister(test_process_123).
 
 sbcast(_Config) ->
     true = erlang:register(test_process_123, self()),
