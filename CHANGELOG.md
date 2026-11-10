@@ -2,6 +2,10 @@
 
 Below is a non-exhaustive list of changes between `gen_rpc` versions.
 
+## 3.5.2
+
+- Improve the binary comparison helper.
+
 ## 3.5.1
 
 - Fix log 'domain' metadata.
