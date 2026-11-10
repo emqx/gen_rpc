@@ -2,10 +2,22 @@
 
 Below is a non-exhaustive list of changes between `gen_rpc` versions.
 
+## 3.6.2
+
+- Improve the binary comparison helper.
+
+## 3.6.1
+
+- Add the `extra_process_flags` option: a list of `{Flag, Value}` tuples applied with `erlang:process_flag/2` to each client and acceptor process at startup.
+
 ## 3.6.0
 
 - Support compression when serializing Erlang term to binary.
 - Add `gen_rpc:check_server_ports_available/0` to help checking if `Address:Port` is in use.
+
+## 3.5.2
+
+- Improve the binary comparison helper.
 
 ## 3.5.1
 
