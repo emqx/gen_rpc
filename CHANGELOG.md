@@ -2,6 +2,10 @@
 
 Below is a non-exhaustive list of changes between `gen_rpc` versions.
 
+## 4.0.1
+
+- Improve the binary comparison helper.
+
 ## 4.0.0
 
 - Breaking: remove the insecure authentication fallback.
