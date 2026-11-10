@@ -482,19 +482,16 @@ rand_bytes() ->
     crypto:strong_rand_bytes(Size).
 
 -spec compare_binaries(binary(), binary()) -> boolean().
-compare_binaries(A, B) when byte_size(A) =:= byte_size(B) ->
-    case do_compare_binaries(binary_to_list(A), binary_to_list(B), 0) of
-        0 -> true;
-        _ -> false
-    end;
-compare_binaries(_, _) ->
-    false.
+compare_binaries(A, B) ->
+    do_compare_binaries(A, B, 0, 0).
 
--spec do_compare_binaries([byte()], [byte()], byte()) -> byte().
-do_compare_binaries([A|L1], [B|L2], Acc) ->
-    do_compare_binaries(L1, L2, Acc bor (A bxor B));
-do_compare_binaries(_, _, Acc) ->
-    Acc.
+-spec do_compare_binaries(binary(), binary(), non_neg_integer(), byte()) -> boolean().
+do_compare_binaries(A, B, I, Acc) when I < byte_size(A), I < byte_size(B) ->
+    do_compare_binaries(A, B, I + 1, Acc bor (binary:at(A, I) bxor binary:at(B, I)));
+do_compare_binaries(A, B, I, Acc) when I =:= byte_size(A), I =:= byte_size(B) ->
+    Acc =:= 0;
+do_compare_binaries(_, _, _, _) ->
+    false.
 
 insecure_fallback_allowed() ->
     application:get_env(gen_rpc, insecure_auth_fallback_allowed, false).
