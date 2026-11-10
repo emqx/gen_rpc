@@ -122,6 +122,13 @@ abcast_with_unregistered_name(_Config) ->
         2000 -> ok
     end.
 
+abcast_preserves_order(_Config) ->
+    Count = 10000,
+    true = erlang:register(test_process_123, self()),
+    ok = rpc:call(?SLAVE, gen_rpc_test_helper, abcast_sequence, [[{?MASTER,random_key}], test_process_123, Count]),
+    ok = gen_rpc_test_helper:receive_sequence(Count),
+    true = erlang:unregister(test_process_123).
+
 sbcast(_Config) ->
     true = erlang:register(test_process_123, self()),
     {[{?MASTER,random_key}], []} = rpc:call(?SLAVE, gen_rpc, sbcast, [[{?MASTER,random_key}], test_process_123, this_is_a_test]),

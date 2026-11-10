@@ -29,6 +29,8 @@
          spawn_short_running/0,
          stub_function/0,
          ping/1,
+         abcast_sequence/3,
+         receive_sequence/1,
          test_call/1,
          init_integration_test_config/0
         ]).
@@ -229,6 +231,25 @@ stub_function() ->
 
 ping({Node, Process, Msg}) ->
     {Process, Node} ! {pong, {node(), Process, Msg}}.
+
+%% Abcast a numbered sequence from a single process
+abcast_sequence(Nodes, Name, Count) ->
+    lists:foreach(fun(N) -> abcast = gen_rpc:abcast(Nodes, Name, {abcast_seq, N}) end,
+                  lists:seq(1, Count)).
+
+%% Expect the abcast sequence to arrive in the order it was sent
+receive_sequence(Count) ->
+    receive_sequence(1, Count).
+
+receive_sequence(N, Count) when N > Count ->
+    ok;
+receive_sequence(N, Count) ->
+    receive
+        {abcast_seq, N} -> receive_sequence(N + 1, Count);
+        {abcast_seq, Other} -> erlang:error({out_of_order, {expected, N}, {got, Other}})
+    after
+        2000 -> erlang:error({timeout, {expected, N}})
+    end.
 
 test_call(SeqNo) ->
     ?tp(do_test_call, #{seqno => SeqNo}).

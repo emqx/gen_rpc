@@ -218,7 +218,7 @@ abcast(Name, Msg) when is_atom(Name) ->
 
 -spec abcast(list(), atom(), term()) -> abcast.
 abcast(Nodes, Name, Msg) when is_list(Nodes), is_atom(Name) ->
-    _ = [erlang:spawn(?MODULE, cast_worker, [Node, {abcast,Name,Msg}, abcast, undefined]) || Node <- Nodes],
+    _ = [cast_worker(Node, ?ABCAST(Name, Msg), abcast, undefined) || Node <- Nodes],
     abcast.
 
 -spec sbcast(atom(), term()) -> {list(), list()}.
