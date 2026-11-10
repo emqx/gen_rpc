@@ -2,6 +2,11 @@
 
 Below is a non-exhaustive list of changes between `gen_rpc` versions.
 
+## 4.0.2
+
+- Keep the message order of `gen_rpc:abcast/2,3` calls. Before this fix, the second of two
+  `abcast` calls from one process sometimes arrived at a remote node before the first one.
+
 ## 4.0.1
 
 - Improve the binary comparison helper.
