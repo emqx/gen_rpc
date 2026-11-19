@@ -39,6 +39,7 @@
         set_controlling_process/2,
         set_send_timeout/2,
         set_acceptor_opts/1,
+        set_packet_size/2,
         getstat/2]).
 
 %%% ===================================================
@@ -152,6 +153,12 @@ set_acceptor_opts(Socket) when is_port(Socket) ->
     ok = set_socket_keepalive(os:type(), Socket),
     ok = inet:setopts(Socket, [{send_timeout, gen_rpc_helper:get_send_timeout(undefined)}|?ACCEPTOR_DEFAULT_TCP_OPTS ++ gen_rpc_helper:get_user_tcp_opts(accept)]),
     ok.
+
+%% Bound the packet body length the transport will buffer before a read
+%% returns. Size 0 restores the default (the full {packet,4} length range).
+-spec set_packet_size(port(), non_neg_integer()) -> ok | {error, inet:posix()}.
+set_packet_size(Socket, Size) when is_port(Socket), is_integer(Size), Size >= 0 ->
+    inet:setopts(Socket, [{packet_size, Size}]).
 
 -spec getstat(port(), list()) -> ok | {error, term()}.
 getstat(Socket, OptNames) ->

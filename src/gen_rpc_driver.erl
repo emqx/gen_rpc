@@ -35,6 +35,8 @@
 
 -callback set_acceptor_opts(term()) -> ok.
 
+-callback set_packet_size(term(), non_neg_integer()) -> ok | {error, term()}.
+
 -ifdef(TEST).
 %% Stub function to fool code coverage
 -export([stub/0]).
