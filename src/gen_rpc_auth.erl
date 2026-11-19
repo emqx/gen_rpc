@@ -66,6 +66,9 @@
 
 -define(BADNODE, {badrpc, badnode}). %% Target node name doesn't match the expected node name
 
+%% Upper bound on a single authentication frame. The transport is told not to
+%% buffer more than this before a handshake read returns; the limit is lifted
+%% once the peer is authenticated, so normal RPC payloads stay unbounded.
 -define(MAX_AUTH_PACKET_SIZE, 1 bsl 20). %% 1 MiB
 
 -define(MIN_CHALLENGE_SIZE, 8).
@@ -113,6 +116,10 @@ connect_with_auth(Driver, Node, Port) ->
 -spec authenticate_client(module(), term(), tuple()) -> ok | {error, auth_error()}.
 authenticate_client(Driver, Socket, Peer) ->
     ok = Driver:set_send_timeout(Socket, gen_rpc_helper:get_send_timeout(undefined)),
+    with_auth_packet_size(Driver, Socket,
+                          fun() -> do_authenticate_client(Driver, Socket, Peer) end).
+
+do_authenticate_client(Driver, Socket, Peer) ->
     RecvTimeout = gen_rpc_helper:get_authentication_timeout(),
     Fallback = insecure_fallback_allowed(),
     case Driver:recv(Socket, 0, RecvTimeout) of
@@ -346,7 +353,7 @@ connect_with_auth(Driver, Node, Port, Fun) ->
     case Driver:connect(Node, Port) of
         {ok, Socket} ->
             ok = Driver:set_send_timeout(Socket, gen_rpc_helper:get_send_timeout(undefined)),
-            case Fun(Driver, Node, Socket) of
+            case with_auth_packet_size(Driver, Socket, fun() -> Fun(Driver, Node, Socket) end) of
                 ok ->
                     {ok, Socket};
                 Err ->
@@ -355,6 +362,34 @@ connect_with_auth(Driver, Node, Port, Fun) ->
             end;
         {error, {_Class, Reason}} ->
             {unreachable, Reason}
+    end.
+
+%% Run the handshake with the transport packet size capped, so the transport
+%% does not buffer more than an authentication frame before a read returns.
+%% The cap is lifted once the peer is authenticated, so normal RPC payloads
+%% are not limited by it. The socket may already be gone when the option is
+%% set; that is reported like any other transport error.
+-spec with_auth_packet_size(module(), term(), fun(() -> ok | {error, auth_error()})) ->
+          ok | {error, auth_error()}.
+with_auth_packet_size(Driver, Socket, Handshake) ->
+    case Driver:set_packet_size(Socket, ?MAX_AUTH_PACKET_SIZE) of
+        ok ->
+            case Handshake() of
+                ok ->
+                    reset_packet_size(Driver, Socket);
+                Error ->
+                    Error
+            end;
+        {error, Reason} ->
+            {error, {badtcp, Reason}}
+    end.
+
+reset_packet_size(Driver, Socket) ->
+    case Driver:set_packet_size(Socket, 0) of
+        ok ->
+            ok;
+        {error, Reason} ->
+            {error, {badtcp, Reason}}
     end.
 
 %%================================================================================
@@ -609,22 +644,7 @@ stage2_rejects_non_binary_test() ->
 %% refused before decoding, with no reply sent. Dropping the compressed guard
 %% makes the compressed case decode and reply, so the test then fails.
 authenticate_client_recv_path_test_() ->
-    {foreach,
-     fun() ->
-             application:set_env(?APP, send_timeout, 5000),
-             application:set_env(?APP, authentication_timeout, 5000),
-             application:set_env(?APP, call_receive_timeout, 5000),
-             meck:new(mock_driver, [non_strict]),
-             meck:expect(mock_driver, set_send_timeout, fun(_, _) -> ok end),
-             meck:expect(mock_driver, get_peer, fun(_) -> {{127, 0, 0, 1}, 5000} end),
-             meck:expect(mock_driver, send, fun(_, _) -> ok end)
-     end,
-     fun(_) ->
-             meck:unload(mock_driver),
-             application:unset_env(?APP, send_timeout),
-             application:unset_env(?APP, authentication_timeout),
-             application:unset_env(?APP, call_receive_timeout)
-     end,
+    {foreach, fun mock_driver_setup/0, fun mock_driver_cleanup/1,
      [ {"plain handshake reaches the challenge-response stage",
         fun() ->
                 Packet = mk_c_packet(crypto:strong_rand_bytes(?MIN_CHALLENGE_SIZE)),
@@ -650,6 +670,24 @@ authenticate_client_recv_path_test_() ->
                              authenticate_client(mock_driver, socket, peer)),
                 ?assertEqual(0, meck:num_calls(mock_driver, send, '_'))
         end} ]}.
+
+-define(TEST_COOKIE, <<"test_cookie">>).
+-define(TEST_ENV, [secret_cookie, send_timeout, authentication_timeout, call_receive_timeout]).
+
+mock_driver_setup() ->
+    application:set_env(?APP, secret_cookie, ?TEST_COOKIE),
+    application:set_env(?APP, send_timeout, 5000),
+    application:set_env(?APP, authentication_timeout, 5000),
+    application:set_env(?APP, call_receive_timeout, 5000),
+    meck:new(mock_driver, [non_strict]),
+    meck:expect(mock_driver, set_send_timeout, fun(_, _) -> ok end),
+    meck:expect(mock_driver, set_packet_size, fun(_, _) -> ok end),
+    meck:expect(mock_driver, get_peer, fun(_) -> {{127, 0, 0, 1}, 5000} end),
+    meck:expect(mock_driver, send, fun(_, _) -> ok end).
+
+mock_driver_cleanup(_) ->
+    meck:unload(mock_driver),
+    lists:foreach(fun(K) -> application:unset_env(?APP, K) end, ?TEST_ENV).
 
 scripted_recv(Seq) ->
     meck:expect(mock_driver, recv, 3, meck:seq(Seq)).
@@ -770,5 +808,91 @@ auth_flow_client_fail_prop() ->
 
 auth_flow_client_fail_test() ->
     ?assert(proper:quickcheck(auth_flow_client_fail_prop(), 100)).
+
+%% The acceptor must cap the transport packet size before its first handshake
+%% read, and lift the cap only after the peer is authenticated, via the driver.
+auth_packet_size_test_() ->
+    {foreach, fun mock_driver_setup/0, fun mock_driver_cleanup/1,
+     [ {"cap is applied before the first read and kept on failure",
+        fun() ->
+                scripted_recv([{error, closed}]),
+                ?assertMatch({error, {badtcp, closed}},
+                             authenticate_client(mock_driver, socket, peer)),
+                ?assertEqual(1, meck:num_calls(mock_driver, set_packet_size,
+                                               [socket, ?MAX_AUTH_PACKET_SIZE])),
+                %% Not reset while unauthenticated:
+                ?assertEqual(0, meck:num_calls(mock_driver, set_packet_size, [socket, 0])),
+                Seq = driver_call_seq(),
+                ?assert(first_index(set_packet_size, Seq) < first_index(recv, Seq))
+        end},
+       {"cap is lifted after a successful handshake",
+        fun() ->
+                scripted_handshake(),
+                ?assertEqual(ok, authenticate_client(mock_driver, socket, peer)),
+                ?assertEqual(1, meck:num_calls(mock_driver, set_packet_size,
+                                               [socket, ?MAX_AUTH_PACKET_SIZE])),
+                ?assertEqual(1, meck:num_calls(mock_driver, set_packet_size, [socket, 0])),
+                Seq = driver_call_seq(),
+                ?assert(first_index(set_packet_size, Seq) < first_index(recv, Seq)),
+                ?assert(last_index(set_packet_size, Seq) > first_index(recv, Seq))
+        end},
+       {"failing to apply the cap is a transport error, nothing is read",
+        fun() ->
+                meck:expect(mock_driver, set_packet_size, fun(_, _) -> {error, einval} end),
+                scripted_handshake(),
+                ?assertEqual({error, {badtcp, einval}},
+                             authenticate_client(mock_driver, socket, peer)),
+                ?assertEqual(0, meck:num_calls(mock_driver, recv, '_'))
+        end},
+       {"failing to lift the cap is a transport error",
+        fun() ->
+                meck:expect(mock_driver, set_packet_size,
+                            fun(_, 0) -> {error, einval};
+                               (_, _) -> ok
+                            end),
+                scripted_handshake(),
+                ?assertEqual({error, {badtcp, einval}},
+                             authenticate_client(mock_driver, socket, peer))
+        end} ]}.
+
+%% Script the peer's side of a successful handshake: the first read returns its
+%% challenge, the second its response to the acceptor's challenge, derived
+%% from the challenge-response the acceptor has just sent.
+scripted_handshake() ->
+    {_, Challenge} = stage1_v1(),
+    meck:expect(
+      mock_driver, recv,
+      fun(_, _, _) ->
+              case meck:num_calls(mock_driver, recv, '_') of
+                  0 ->
+                      {ok, Challenge};
+                  _ ->
+                      [#gen_rpc_authenticate_cr{challenge = ServerChallenge}] = sent_terms(),
+                      {ok, make_r(?TEST_COOKIE, ServerChallenge)}
+              end
+      end).
+
+driver_call_seq() ->
+    [{F, A} || {_Pid, {mock_driver, F, A}, _Ret} <- meck:history(mock_driver)].
+
+first_index(Fun, Seq) ->
+    index_of(Fun, Seq, 1).
+
+index_of(_Fun, [], _I) ->
+    not_found;
+index_of(Fun, [{Fun, _} | _], I) ->
+    I;
+index_of(Fun, [_ | T], I) ->
+    index_of(Fun, T, I + 1).
+
+last_index(Fun, Seq) ->
+    last_index(Fun, Seq, 1, not_found).
+
+last_index(_Fun, [], _I, Acc) ->
+    Acc;
+last_index(Fun, [{Fun, _} | T], I, _Acc) ->
+    last_index(Fun, T, I + 1, I);
+last_index(Fun, [_ | T], I, Acc) ->
+    last_index(Fun, T, I + 1, Acc).
 
 -endif.
