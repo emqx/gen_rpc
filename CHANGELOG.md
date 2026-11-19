@@ -2,6 +2,13 @@
 
 Below is a non-exhaustive list of changes between `gen_rpc` versions.
 
+## 3.5.3
+
+- Use a reserved size for the challenge issued by the responding side, and reject peer challenges of that size.
+- Normalise `challenge_size` to a power of two in the range 8 to 128 bytes.
+- Limit authentication packets to 1 MiB and refuse compressed ones.
+- Limit the transport packet size while a connection is being authenticated.
+
 ## 3.5.2
 
 - Improve the binary comparison helper.
