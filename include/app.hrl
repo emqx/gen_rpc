@@ -7,3 +7,7 @@
 -define(APP, gen_rpc).
 
 -define(USER_TCP_OPTS, [socket_buffer, socket_recbuf, socket_sndbuf]).
+
+%% Fixed byte size of the challenge issued by the responding side.
+%% Reserved: `challenge_size' (the initiating side) must not use it.
+-define(SERVER_CHALLENGE_SIZE, 63).
