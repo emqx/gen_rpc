@@ -15,6 +15,7 @@
 %%--------------------------------------------------------------------
 -module(gen_rpc_auth).
 
+-include("app.hrl").
 -include("logger.hrl").
 -include_lib("snabbkaffe/include/trace.hrl").
 
@@ -65,6 +66,19 @@
 
 -define(BADNODE, {badrpc, badnode}). %% Target node name doesn't match the expected node name
 
+-define(MAX_AUTH_PACKET_SIZE, 1 bsl 20). %% 1 MiB
+
+-define(MIN_CHALLENGE_SIZE, 8).
+-define(MAX_CHALLENGE_SIZE, 128).
+
+%% External term format: version byte 131 followed by the compressed-term
+%% tag 80. A compressed term can expand far beyond its encoded size, so it
+%% is refused before decoding, regardless of the encoded-size limit above.
+-define(COMPRESSED_TERM(Rest), <<131, 80, Rest/binary>>).
+
+-define(IS_STAGE2_CHALLENGE(Challenge),
+        (is_binary(Challenge) andalso byte_size(Challenge) =/= ?SERVER_CHALLENGE_SIZE)).
+
 -type auth_error() :: {badtcp, _}          %% Network errors
                     | ?BADPACKET           %% Bad packet
                     | ?UNAUTHORIZED        %% Bad cookie
@@ -102,7 +116,9 @@ authenticate_client(Driver, Socket, Peer) ->
     RecvTimeout = gen_rpc_helper:get_authentication_timeout(),
     Fallback = insecure_fallback_allowed(),
     case Driver:recv(Socket, 0, RecvTimeout) of
-        {ok, Data} ->
+        {ok, ?COMPRESSED_TERM(_)} ->
+            {error, ?BADPACKET};
+        {ok, Data} when byte_size(Data) =< ?MAX_AUTH_PACKET_SIZE ->
             case authenticate_client_cr(Driver, Socket, Data) of
                 {error, ?BADPACKET} when Fallback ->
                     ?tp(warning, gen_rpc_insecure_fallback, #{peer => Peer, role => server, domain => ?D_AUTH}),
@@ -110,6 +126,8 @@ authenticate_client(Driver, Socket, Peer) ->
                 Result ->
                     Result
             end;
+        {ok, _Data} ->
+            {error, ?BADPACKET};
         {error, Reason} ->
             ?tp(error, gen_rpc_client_auth_timeout, #{peer => Peer, error => Reason, domain => ?D_AUTH}),
             {error, {badtcp, Reason}}
@@ -304,8 +322,12 @@ authenticate_client_insecure(Driver, Socket, Peer, Data) ->
 recv(Driver, Socket, Meta) ->
     RecvTimeout = gen_rpc_helper:get_call_receive_timeout(undefined),
     case Driver:recv(Socket, 0, RecvTimeout) of
-        {ok, Packet} ->
+        {ok, ?COMPRESSED_TERM(_)} ->
+            throw({badtcp, recv, Meta, compressed});
+        {ok, Packet} when byte_size(Packet) =< ?MAX_AUTH_PACKET_SIZE ->
             Packet;
+        {ok, _Packet} ->
+            throw({badtcp, recv, Meta, oversized});
         {error, Reason} ->
             throw({badtcp, recv, Meta, Reason})
     end.
@@ -358,7 +380,8 @@ stage4(MyChallenge, Packet) ->
 -spec stage2(secret(), packet()) -> {ok, {challenge(), packet()}} | {error, auth_error()}.
 stage2(Secret, Packet) ->
     try erlang:binary_to_term(Packet, [safe, used]) of
-        {#gen_rpc_authenticate_c{challenge = Challenge}, Used} ->
+        {#gen_rpc_authenticate_c{challenge = Challenge}, Used}
+          when ?IS_STAGE2_CHALLENGE(Challenge) ->
             case split_binary(Packet, Used) of
                 {_, <<>>} ->
                     %% Old style of challenge packet that doesn't
@@ -417,7 +440,7 @@ make_c(Node) ->
 
 -spec make_cr(secret(), challenge()) -> {challenge(), packet()}.
 make_cr(Secret, Challenge) ->
-    NewChallenge = rand_bytes(),
+    NewChallenge = crypto:strong_rand_bytes(?SERVER_CHALLENGE_SIZE),
     Term = #gen_rpc_authenticate_cr{
               challenge = NewChallenge,
               response  = response(Secret, Challenge)
@@ -478,8 +501,26 @@ check_response(Secret, Challenge, Response) ->
 
 -spec rand_bytes() -> binary().
 rand_bytes() ->
-    Size = application:get_env(gen_rpc, challenge_size, 8),
-    crypto:strong_rand_bytes(Size).
+    crypto:strong_rand_bytes(challenge_size()).
+
+%% Dialer challenge size, normalised to a power of two in
+%% [?MIN_CHALLENGE_SIZE, ?MAX_CHALLENGE_SIZE]. A power of two never equals
+%% the reserved responder size, so the two sides can never pick the same
+%% size however `challenge_size' is configured.
+challenge_size() ->
+    clamp_pow2(application:get_env(gen_rpc, challenge_size, ?MIN_CHALLENGE_SIZE)).
+
+clamp_pow2(N) when is_integer(N), N =< ?MIN_CHALLENGE_SIZE ->
+    ?MIN_CHALLENGE_SIZE;
+clamp_pow2(N) when is_integer(N), N >= ?MAX_CHALLENGE_SIZE ->
+    ?MAX_CHALLENGE_SIZE;
+clamp_pow2(N) when is_integer(N) ->
+    next_pow2(N, ?MIN_CHALLENGE_SIZE);
+clamp_pow2(_) ->
+    ?MIN_CHALLENGE_SIZE.
+
+next_pow2(N, Acc) when Acc >= N -> Acc;
+next_pow2(N, Acc) -> next_pow2(N, Acc bsl 1).
 
 -spec compare_binaries(binary(), binary()) -> boolean().
 compare_binaries(A, B) ->
@@ -528,8 +569,94 @@ make_c_v1() ->
 stage1_v1() ->
     make_c_v1().
 
+%% Build a v1 (no node name) initiator packet carrying an arbitrary
+%% challenge term, as a peer would send it to the acceptor's stage2.
+mk_c_packet(Challenge) ->
+    erlang:term_to_binary(#gen_rpc_authenticate_c{challenge = Challenge}).
+
 rand_bytes_test() ->
     ?assert(is_binary(rand_bytes())).
+
+clamp_pow2_test() ->
+    ?assertEqual(8, clamp_pow2(1)),
+    ?assertEqual(8, clamp_pow2(8)),
+    ?assertEqual(16, clamp_pow2(9)),
+    ?assertEqual(64, clamp_pow2(?SERVER_CHALLENGE_SIZE)),
+    ?assertEqual(64, clamp_pow2(64)),
+    ?assertEqual(128, clamp_pow2(65)),
+    ?assertEqual(128, clamp_pow2(1000)),
+    ?assertEqual(8, clamp_pow2(not_an_integer)).
+
+%% A peer challenge of the reserved responder size must be rejected, so the
+%% acceptor cannot be made to sign a challenge it issued itself (reflection).
+stage2_rejects_reserved_size_test() ->
+    Secret = <<"cookie">>,
+    Reserved = crypto:strong_rand_bytes(?SERVER_CHALLENGE_SIZE),
+    ?assertEqual({error, ?BADPACKET}, stage2(Secret, mk_c_packet(Reserved))),
+    %% A normal-size challenge is still accepted:
+    Ok = crypto:strong_rand_bytes(?MIN_CHALLENGE_SIZE),
+    ?assertMatch({ok, {_, _}}, stage2(Secret, mk_c_packet(Ok))).
+
+%% A non-binary (iolist) challenge must be rejected even though crypto:hash/2
+%% would accept it as iodata: a byte_size guard alone is bypassable.
+stage2_rejects_non_binary_test() ->
+    Secret = <<"cookie">>,
+    ?assertEqual({error, ?BADPACKET}, stage2(Secret, mk_c_packet([<<"ab">>, <<"cd">>]))).
+
+%% Drive authenticate_client/3 over a mocked driver with a valid handshake
+%% term in both encodings. The plain request must reach the next stage (the
+%% acceptor replies with a challenge-response); the compressed request must be
+%% refused before decoding, with no reply sent. Dropping the compressed guard
+%% makes the compressed case decode and reply, so the test then fails.
+authenticate_client_recv_path_test_() ->
+    {foreach,
+     fun() ->
+             application:set_env(?APP, send_timeout, 5000),
+             application:set_env(?APP, authentication_timeout, 5000),
+             application:set_env(?APP, call_receive_timeout, 5000),
+             meck:new(mock_driver, [non_strict]),
+             meck:expect(mock_driver, set_send_timeout, fun(_, _) -> ok end),
+             meck:expect(mock_driver, get_peer, fun(_) -> {{127, 0, 0, 1}, 5000} end),
+             meck:expect(mock_driver, send, fun(_, _) -> ok end)
+     end,
+     fun(_) ->
+             meck:unload(mock_driver),
+             application:unset_env(?APP, send_timeout),
+             application:unset_env(?APP, authentication_timeout),
+             application:unset_env(?APP, call_receive_timeout)
+     end,
+     [ {"plain handshake reaches the challenge-response stage",
+        fun() ->
+                Packet = mk_c_packet(crypto:strong_rand_bytes(?MIN_CHALLENGE_SIZE)),
+                scripted_recv([{ok, Packet}, {error, closed}]),
+                %% The stage4 recv fails with closed, but only after the
+                %% acceptor has replied to the peer's challenge:
+                ?assertMatch({error, {badtcp, closed}},
+                             authenticate_client(mock_driver, socket, peer)),
+                ?assertMatch([#gen_rpc_authenticate_cr{}], sent_terms())
+        end},
+       {"compressed handshake is refused before decoding",
+        fun() ->
+                %% A valid handshake term whose binary form starts with the
+                %% compressed-term tag and stays under the encoded-size limit,
+                %% yet decodes to more than 1 MiB:
+                Big = binary:copy(<<0>>, 1 bsl 20),
+                Packet = erlang:term_to_binary(#gen_rpc_authenticate_c{challenge = Big},
+                                               [compressed]),
+                ?assertMatch(?COMPRESSED_TERM(_), Packet),
+                ?assert(byte_size(Packet) =< ?MAX_AUTH_PACKET_SIZE),
+                scripted_recv([{ok, Packet}, {error, closed}]),
+                ?assertEqual({error, ?BADPACKET},
+                             authenticate_client(mock_driver, socket, peer)),
+                ?assertEqual(0, meck:num_calls(mock_driver, send, '_'))
+        end} ]}.
+
+scripted_recv(Seq) ->
+    meck:expect(mock_driver, recv, 3, meck:seq(Seq)).
+
+sent_terms() ->
+    [erlang:binary_to_term(Sent)
+     || {_Pid, {mock_driver, send, [_Socket, Sent]}, _Ret} <- meck:history(mock_driver)].
 
 compare_binaries_test() ->
     A1 = crypto:hash(sha256, <<"a">>),
