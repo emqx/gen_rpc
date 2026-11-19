@@ -41,6 +41,7 @@
          set_controlling_process/2,
          set_send_timeout/2,
          set_acceptor_opts/1,
+         set_packet_size/2,
          getstat/2]).
 
 %%% ===================================================
@@ -147,6 +148,12 @@ set_acceptor_opts(Socket) when is_tuple(Socket) ->
     ok = ssl:setopts(Socket, [{send_timeout, gen_rpc_helper:get_send_timeout(undefined)} |
                               gen_rpc_helper:get_user_tcp_opts(accept)]),
     ok.
+
+%% Bound the packet body length the transport will buffer before a read
+%% returns. Size 0 restores the default (the full {packet,4} length range).
+-spec set_packet_size(ssl:sslsocket(), non_neg_integer()) -> ok | {error, term()}.
+set_packet_size(Socket, Size) when is_tuple(Socket), is_integer(Size), Size >= 0 ->
+    ssl:setopts(Socket, [{packet_size, Size}]).
 
 -spec getstat(ssl:sslsocket(), list()) -> ok | {error, any()}.
 getstat(Socket, OptNames) ->

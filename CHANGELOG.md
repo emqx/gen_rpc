@@ -2,6 +2,13 @@
 
 Below is a non-exhaustive list of changes between `gen_rpc` versions.
 
+## 4.0.3
+
+- Use a reserved size for the challenge issued by the responding side, and reject peer challenges of that size.
+- Normalise `challenge_size` to a power of two in the range 8 to 128 bytes.
+- Limit authentication packets to 1 MiB and refuse compressed ones.
+- Limit the transport packet size while a connection is being authenticated.
+
 ## 4.0.2
 
 - Keep the message order of `gen_rpc:abcast/2,3` calls. Before this fix, the second of two
@@ -23,6 +30,13 @@ Below is a non-exhaustive list of changes between `gen_rpc` versions.
     still contains pre-3.0.0 nodes must upgrade them to a 3.x release before upgrading
     to 4.0.0.
 
+## 3.6.3
+
+- Use a reserved size for the challenge issued by the responding side, and reject peer challenges of that size.
+- Normalise `challenge_size` to a power of two in the range 8 to 128 bytes.
+- Limit authentication packets to 1 MiB and refuse compressed ones.
+- Limit the transport packet size while a connection is being authenticated.
+
 ## 3.6.2
 
 - Improve the binary comparison helper.
@@ -35,6 +49,13 @@ Below is a non-exhaustive list of changes between `gen_rpc` versions.
 
 - Support compression when serializing Erlang term to binary.
 - Add `gen_rpc:check_server_ports_available/0` to help checking if `Address:Port` is in use.
+
+## 3.5.3
+
+- Use a reserved size for the challenge issued by the responding side, and reject peer challenges of that size.
+- Normalise `challenge_size` to a power of two in the range 8 to 128 bytes.
+- Limit authentication packets to 1 MiB and refuse compressed ones.
+- Limit the transport packet size while a connection is being authenticated.
 
 ## 3.5.2
 

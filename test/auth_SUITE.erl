@@ -270,6 +270,71 @@ no_cookie_on_wire(Config, Mode, ExpectedResult) ->
        , fun ?MODULE:prop_no_fallback/1
        ]).
 
+%% An unauthenticated peer announces a frame larger than the authentication
+%% limit. The acceptor drops the connection without waiting for the body.
+t_auth_packet_size_acceptor(Config) ->
+    Driver = gen_rpc_test_helper:get_driver_from_config(Config),
+    ?check_trace(
+       #{timetrap => 10000},
+       begin
+           ok = gen_rpc_test_helper:start_master(Driver),
+           {ok, Socket} = raw_connect(Driver, ?MASTER_PORT),
+           ?assertMatch(
+              {ok, {ok, _}},
+              ?wait_async_action(
+                 raw_send(Driver, Socket, oversized_frame_header()),
+                 #{?snk_kind := gen_rpc_client_auth_timeout},
+                 3000)),
+           ?assertMatch({error, Reason} when Reason =/= timeout,
+                        raw_recv(Driver, Socket, 3000))
+       end,
+       fun(Trace) ->
+               ?assertMatch([_], ?of_kind(gen_rpc_client_auth_timeout, Trace)),
+               [#{error := Error}] = ?of_kind(gen_rpc_client_auth_timeout, Trace),
+               ?assert(is_packet_size_error(Error), Error)
+       end).
+
+%% A responder announces a frame larger than the authentication limit in reply
+%% to the dialer's challenge. The dialer gives up without waiting for the body.
+t_auth_packet_size_dialer(Config) ->
+    Driver = gen_rpc_test_helper:get_driver_from_config(Config),
+    ?check_trace(
+       #{timetrap => 10000},
+       begin
+           ok = gen_rpc_test_helper:start_master(Driver),
+           {ok, ListenSocket} = raw_listen(Driver, ?SLAVE_PORT),
+           try
+               _ = spawn_link(fun() -> oversized_responder(Driver, ListenSocket) end),
+               ?assertMatch({badrpc, _}, gen_rpc:call(?SLAVE, ?MODULE, canary, []))
+           after
+               raw_close(Driver, ListenSocket)
+           end
+       end,
+       fun(Trace) ->
+               ?assertMatch([_ | _], ?of_kind(gen_rpc_authentication_badtcp, Trace)),
+               [#{action := Action, reason := Reason} | _] =
+                   ?of_kind(gen_rpc_authentication_badtcp, Trace),
+               ?assertEqual(recv, Action),
+               ?assert(is_packet_size_error(Reason), Reason)
+       end).
+
+%% Once the peer is authenticated the limit no longer applies: requests and
+%% replies larger than the authentication limit pass in both directions.
+t_large_payload_after_auth(Config) ->
+    Driver = gen_rpc_test_helper:get_driver_from_config(Config),
+    Size = 2 * 1024 * 1024,
+    ?check_trace(
+       #{timetrap => 20000},
+       begin
+           ok = gen_rpc_test_helper:start_master(Driver),
+           ok = gen_rpc_test_helper:start_slave(Driver),
+           Request = crypto:strong_rand_bytes(Size),
+           ?assertEqual(Size, gen_rpc:call(?SLAVE, erlang, byte_size, [Request])),
+           ?assertMatch(<<_:Size/binary>>,
+                        gen_rpc:call(?SLAVE, crypto, strong_rand_bytes, [Size]))
+       end,
+       []).
+
 %% Compatibility: a peer that speaks challenge-response (gen_rpc 3.0.0
 %% and later) authenticates normally.  A peer that predates
 %% challenge-response must fail to authenticate: the insecure auth
@@ -392,6 +457,69 @@ prop_client_authentication_failed_trace(Trace) ->
             Events
         )
     ).
+
+%% A {packet, 4} length header announcing a 64 MiB frame, without its body.
+oversized_frame_header() ->
+    <<(64 * 1024 * 1024):32>>.
+
+%% The tcp driver reports `emsgsize', the ssl driver `{invalid_packet, _}'.
+is_packet_size_error(emsgsize) -> true;
+is_packet_size_error({invalid_packet, _}) -> true;
+is_packet_size_error(_) -> false.
+
+%% Accept dialers, wait for the challenge and announce an oversized reply.
+oversized_responder(Driver, ListenSocket) ->
+    case raw_accept(Driver, ListenSocket) of
+        {ok, Socket} ->
+            {ok, _Challenge} = raw_recv(Driver, Socket, 5000),
+            ok = raw_send(Driver, Socket, oversized_frame_header()),
+            %% Hold the connection until the dialer drops it:
+            _ = raw_recv(Driver, Socket, 5000),
+            _ = raw_close(Driver, Socket),
+            oversized_responder(Driver, ListenSocket);
+        {error, _} ->
+            ok
+    end.
+
+%% Plain sockets that speak neither the framing nor the handshake of gen_rpc.
+raw_socket_opts() ->
+    [binary, {packet, raw}, {active, false}].
+
+raw_tls_opts() ->
+    Dir = filename:join(code:priv_dir(?APP), "ssl"),
+    Prefix = filename:join(Dir, atom_to_list(?SLAVE)),
+    [ {certfile, Prefix ++ ".cert.pem"}
+    , {keyfile, Prefix ++ ".key.pem"}
+    , {cacertfile, filename:join(Dir, "ca.cert.pem")}
+    , {verify, verify_none}
+    ].
+
+raw_connect(tcp, Port) ->
+    gen_tcp:connect({127, 0, 0, 1}, Port, raw_socket_opts(), 5000);
+raw_connect(ssl, Port) ->
+    ssl:connect({127, 0, 0, 1}, Port, raw_socket_opts() ++ raw_tls_opts(), 5000).
+
+raw_listen(tcp, Port) ->
+    gen_tcp:listen(Port, [{reuseaddr, true}, {ip, {127, 0, 0, 1}} | raw_socket_opts()]);
+raw_listen(ssl, Port) ->
+    ssl:listen(Port, [{reuseaddr, true}, {ip, {127, 0, 0, 1}} | raw_socket_opts()] ++ raw_tls_opts()).
+
+raw_accept(tcp, ListenSocket) ->
+    gen_tcp:accept(ListenSocket);
+raw_accept(ssl, ListenSocket) ->
+    case ssl:transport_accept(ListenSocket) of
+        {ok, Socket} -> ssl:handshake(Socket, 5000);
+        {error, _} = Error -> Error
+    end.
+
+raw_send(tcp, Socket, Data) -> gen_tcp:send(Socket, Data);
+raw_send(ssl, Socket, Data) -> ssl:send(Socket, Data).
+
+raw_recv(tcp, Socket, Timeout) -> gen_tcp:recv(Socket, 0, Timeout);
+raw_recv(ssl, Socket, Timeout) -> ssl:recv(Socket, 0, Timeout).
+
+raw_close(tcp, Socket) -> gen_tcp:close(Socket);
+raw_close(ssl, Socket) -> ssl:close(Socket).
 
 prop_no_fallback(Trace) ->
     ?assertMatch([], ?of_kind([gen_rpc_insecure_fallback, gen_rpc_auth_cr_v1_fallback], Trace)).
