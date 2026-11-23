@@ -2,6 +2,10 @@
 
 Below is a non-exhaustive list of changes between `gen_rpc` versions.
 
+## 4.0.4
+
+- Build and parse authentication packets in a new module, `gen_rpc_auth_proto`, in place of `term_to_binary/1` and `binary_to_term/2`. It accepts only the terms that these packets are made of: atoms, binaries and small tuples. The packet format does not change.
+
 ## 4.0.3
 
 - Use a reserved size for the challenge issued by the responding side, and reject peer challenges of that size.
