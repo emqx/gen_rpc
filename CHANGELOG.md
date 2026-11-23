@@ -2,6 +2,10 @@
 
 Below is a non-exhaustive list of changes between `gen_rpc` versions.
 
+## 3.5.4
+
+- Decode authentication packets with a dedicated decoder. It accepts only the terms that these packets are made of: atoms, binaries, strings and small tuples. The packet format does not change.
+
 ## 3.5.3
 
 - Use a reserved size for the challenge issued by the responding side, and reject peer challenges of that size.
