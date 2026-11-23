@@ -520,7 +520,9 @@ check_r(Secret, Challenge, Packet) ->
 %% term: a peer that is not authenticated yet can send these shapes only, and
 %% anything else is refused. An atom is never created, like with the `safe'
 %% option of `binary_to_term/2'. The bytes after the term are returned, like
-%% with its `used' option.
+%% with its `used' option. A caller ignores the bytes that it does not know,
+%% so that a later release can add data after the term, as was done with the
+%% node name after the challenge.
 -spec decode_packet(packet()) -> {ok, term(), Rest :: binary()} | error.
 decode_packet(Packet) ->
     case byte_at(Packet, 0) of
@@ -536,14 +538,15 @@ decode_packet(Packet) ->
     end.
 
 %% Decode the term that starts at byte `Pos' of the packet. Returns the term
-%% and the position of the first byte after it.
-decode_term(Packet, Pos, Depth) ->
+%% and the position of the first byte after it. `RemainingDepth' is how many
+%% more levels of tuples may follow.
+decode_term(Packet, Pos, RemainingDepth) ->
     case byte_at(Packet, Pos) of
-        %% SMALL_TUPLE_EXT
-        104 when Depth > 0 ->
+        %% SMALL_TUPLE_EXT. No authentication packet has an empty tuple.
+        104 when RemainingDepth > 0 ->
             case byte_at(Packet, Pos + 1) of
-                Arity when is_integer(Arity), Arity =< ?MAX_PACKET_TUPLE_ARITY ->
-                    decode_elements(Arity, Packet, Pos + 2, Depth - 1, []);
+                Arity when is_integer(Arity), Arity > 0, Arity =< ?MAX_PACKET_TUPLE_ARITY ->
+                    decode_elements(Arity, Packet, Pos + 2, RemainingDepth - 1, []);
                 _ ->
                     error
             end;
@@ -569,12 +572,12 @@ decode_term(Packet, Pos, Depth) ->
             error
     end.
 
-decode_elements(0, _Packet, Pos, _Depth, Acc) ->
+decode_elements(N, _Packet, Pos, _RemainingDepth, Acc) when N =< 0 ->
     {ok, list_to_tuple(lists:reverse(Acc)), Pos};
-decode_elements(N, Packet, Pos, Depth, Acc) ->
-    case decode_term(Packet, Pos, Depth) of
+decode_elements(N, Packet, Pos, RemainingDepth, Acc) ->
+    case decode_term(Packet, Pos, RemainingDepth) of
         {ok, Term, End} ->
-            decode_elements(N - 1, Packet, End, Depth, [Term | Acc]);
+            decode_elements(N - 1, Packet, End, RemainingDepth, [Term | Acc]);
         error ->
             error
     end.
@@ -834,6 +837,7 @@ decode_packet_refuses_other_terms_test() ->
     Terms = [ 1, -1, 1 bsl 64, 1.0, [], [a], [256], <<1:1>>, #{}, #{a => b}
             , self(), make_ref(), fun erlang:node/0
             , {a, [<<"b">>]}
+            , {}            %% fewer elements than any authentication packet
             , {a, b, c, d}  %% more elements than any authentication packet
             , {a, {b, {c}}} %% deeper than any authentication packet
             ],
