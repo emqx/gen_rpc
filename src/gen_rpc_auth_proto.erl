@@ -44,6 +44,9 @@
 %% a packet is made of atoms, binaries and small tuples only, and `decode/1'
 %% refuses anything else. The bytes on the wire are the same as before, so
 %% nodes of other releases can still authenticate.
+%%
+%% `decode/1' ignores the bytes after a packet. A later release can add data
+%% there, as was done with the node name after the challenge.
 -module(gen_rpc_auth_proto).
 
 -export([encode/1, decode/1]).
@@ -137,7 +140,8 @@ decode_node(_Challenge, _Rest) ->
 encode_term(Term) ->
     iolist_to_binary([?VERSION, encode_element(Term)]).
 
-encode_element(Tuple) when is_tuple(Tuple), tuple_size(Tuple) =< ?MAX_TUPLE_ARITY ->
+encode_element(Tuple)
+  when is_tuple(Tuple), tuple_size(Tuple) > 0, tuple_size(Tuple) =< ?MAX_TUPLE_ARITY ->
     [?SMALL_TUPLE_EXT, tuple_size(Tuple) | [encode_element(E) || E <- tuple_to_list(Tuple)]];
 encode_element(Bin) when is_binary(Bin) ->
     [<<?BINARY_EXT, (byte_size(Bin)):32>>, Bin];
@@ -163,13 +167,15 @@ decode_term(Packet) ->
     end.
 
 %% Decode the term that starts at byte `Pos' of the packet. Returns the term
-%% and the position of the first byte after it.
-decode_element(Packet, Pos, Depth) ->
+%% and the position of the first byte after it. `RemainingDepth' is how many
+%% more levels of tuples may follow.
+decode_element(Packet, Pos, RemainingDepth) ->
     case byte_at(Packet, Pos) of
-        ?SMALL_TUPLE_EXT when Depth > 0 ->
+        %% No packet has an empty tuple.
+        ?SMALL_TUPLE_EXT when RemainingDepth > 0 ->
             case byte_at(Packet, Pos + 1) of
-                Arity when is_integer(Arity), Arity =< ?MAX_TUPLE_ARITY ->
-                    decode_elements(Arity, Packet, Pos + 2, Depth - 1, []);
+                Arity when is_integer(Arity), Arity > 0, Arity =< ?MAX_TUPLE_ARITY ->
+                    decode_elements(Arity, Packet, Pos + 2, RemainingDepth - 1, []);
                 _ ->
                     error
             end;
@@ -187,12 +193,12 @@ decode_element(Packet, Pos, Depth) ->
             error
     end.
 
-decode_elements(0, _Packet, Pos, _Depth, Acc) ->
+decode_elements(N, _Packet, Pos, _RemainingDepth, Acc) when N =< 0 ->
     {ok, list_to_tuple(lists:reverse(Acc)), Pos};
-decode_elements(N, Packet, Pos, Depth, Acc) ->
-    case decode_element(Packet, Pos, Depth) of
+decode_elements(N, Packet, Pos, RemainingDepth, Acc) ->
+    case decode_element(Packet, Pos, RemainingDepth) of
         {ok, Term, End} ->
-            decode_elements(N - 1, Packet, End, Depth, [Term | Acc]);
+            decode_elements(N - 1, Packet, End, RemainingDepth, [Term | Acc]);
         error ->
             error
     end.
@@ -328,6 +334,7 @@ decode_refuses_other_terms_test() ->
             , self(), make_ref(), fun erlang:node/0
             , {gen_rpc_authenticate_c, [<<"ab">>, <<"cd">>]}
             , {gen_rpc_authenticate_r, "abc"}
+            , {}            %% fewer elements than any packet
             , {a, b, c, d}  %% more elements than any packet
             , {a, {b, {c}}} %% deeper than any packet
             ],
