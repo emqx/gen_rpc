@@ -59,11 +59,6 @@
 -define(MIN_CHALLENGE_SIZE, 8).
 -define(MAX_CHALLENGE_SIZE, 128).
 
-%% External term format: version byte 131 followed by the compressed-term
-%% tag 80. A compressed term can expand far beyond its encoded size, so it
-%% is refused before decoding, regardless of the encoded-size limit above.
--define(COMPRESSED_TERM(Rest), <<131, 80, Rest/binary>>).
-
 -define(IS_STAGE2_CHALLENGE(Challenge),
         (is_binary(Challenge) andalso byte_size(Challenge) =/= ?SERVER_CHALLENGE_SIZE)).
 
@@ -92,8 +87,6 @@ authenticate_client(Driver, Socket, Peer) ->
 do_authenticate_client(Driver, Socket, Peer) ->
     RecvTimeout = gen_rpc_helper:get_authentication_timeout(),
     case Driver:recv(Socket, 0, RecvTimeout) of
-        {ok, ?COMPRESSED_TERM(_)} ->
-            {error, ?BADPACKET};
         {ok, Data} when byte_size(Data) =< ?MAX_AUTH_PACKET_SIZE ->
             authenticate_client_cr(Driver, Socket, Data);
         {ok, _Data} ->
@@ -179,8 +172,6 @@ authenticate_client_cr(Driver, Socket, Data) ->
 recv(Driver, Socket, Meta) ->
     RecvTimeout = gen_rpc_helper:get_call_receive_timeout(undefined),
     case Driver:recv(Socket, 0, RecvTimeout) of
-        {ok, ?COMPRESSED_TERM(_)} ->
-            throw({badtcp, recv, Meta, compressed});
         {ok, Packet} when byte_size(Packet) =< ?MAX_AUTH_PACKET_SIZE ->
             Packet;
         {ok, _Packet} ->
@@ -449,8 +440,7 @@ stage2_rejects_non_binary_test() ->
 %% Drive authenticate_client/3 over a mocked driver with a valid handshake
 %% term in both encodings. The plain request must reach the next stage (the
 %% acceptor replies with a challenge-response); the compressed request must be
-%% refused before decoding, with no reply sent. Dropping the compressed guard
-%% makes the compressed case decode and reply, so the test then fails.
+%% refused, with no reply sent. A compressed packet is never decompressed.
 authenticate_client_recv_path_test_() ->
     {foreach, fun mock_driver_setup/0, fun mock_driver_cleanup/1,
      [ {"plain handshake reaches the challenge-response stage",
@@ -463,7 +453,7 @@ authenticate_client_recv_path_test_() ->
                              authenticate_client(mock_driver, socket, peer)),
                 ?assertMatch([{challenge_response, _, _}], sent_packets())
         end},
-       {"compressed handshake is refused before decoding",
+       {"compressed handshake is refused",
         fun() ->
                 %% A valid handshake term whose binary form starts with the
                 %% compressed-term tag and stays under the encoded-size limit,
@@ -471,7 +461,7 @@ authenticate_client_recv_path_test_() ->
                 Big = binary:copy(<<0>>, 1 bsl 20),
                 Packet = erlang:term_to_binary({gen_rpc_authenticate_c, Big},
                                                [compressed]),
-                ?assertMatch(?COMPRESSED_TERM(_), Packet),
+                ?assertMatch(<<131, 80, _/binary>>, Packet),
                 ?assert(byte_size(Packet) =< ?MAX_AUTH_PACKET_SIZE),
                 scripted_recv([{ok, Packet}, {error, closed}]),
                 ?assertEqual({error, ?BADPACKET},
