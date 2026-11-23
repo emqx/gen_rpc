@@ -148,6 +148,23 @@ cast_mfa_throw(_Config) ->
 cast_inexistent_node(_Config) ->
     true = gen_rpc:cast(?FAKE_NODE, os, timestamp, [], 1000).
 
+try_ordered_cast(_Config) ->
+    Key = erlang:unique_integer([monotonic, positive]),
+    ok = gen_rpc_test_helper:clear_stored(Key),
+    ok = gen_rpc:try_ordered_cast({?MASTER, Key}, gen_rpc_test_helper, delayed_store, [Key, done, 200]),
+    done = gen_rpc:call({?MASTER, Key}, gen_rpc_test_helper, read_stored, [Key]).
+
+try_ordered_cast_start_failure(_Config) ->
+    Key = erlang:unique_integer([monotonic, positive]),
+    ok = application:set_env(?APP, client_config_per_node, {external, ?MODULE}),
+    {error, {badrpc, {external_source_error, simulated_start_failure}}} =
+        gen_rpc:try_ordered_cast({?MASTER, Key}, os, timestamp, []),
+    undefined = gen_rpc_client:where_is({?MASTER, Key}),
+    true = gen_rpc:ordered_cast({?MASTER, Key}, os, timestamp, []).
+
+get_config(?MASTER) ->
+    {error, simulated_start_failure}.
+
 async_call(_Config) ->
     YieldKey0 = gen_rpc:async_call(?MASTER, os, timestamp, []),
     {_Mega, _Sec, _Micro} = gen_rpc:yield(YieldKey0),

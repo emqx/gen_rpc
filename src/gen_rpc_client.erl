@@ -38,7 +38,7 @@
 -export([start_link/1, stop/1]).
 
 %%% Server functions
--export([call/3, call/4, call/5, call/6, cast/3, cast/4, cast/5, ordered_cast/4]).
+-export([call/3, call/4, call/5, call/6, cast/3, cast/4, cast/5, ordered_cast/4, try_ordered_cast/4]).
 
 -export([async_call/3, async_call/4, yield/1, nb_yield/1, nb_yield/2]).
 
@@ -128,6 +128,12 @@ cast(NodeOrTuple, M, F, A, SendTimeout) when ?is_node_or_tuple(NodeOrTuple), is_
 ordered_cast(NodeOrTuple, M, F, A) when ?is_node_or_tuple(NodeOrTuple), is_atom(M) orelse is_tuple(M), is_atom(F), is_list(A) ->
     cast_worker(NodeOrTuple, ?ORDERED_CAST(M, F, A), undefined, undefined),
     true.
+
+%% @doc Like ordered_cast/4, but returns the result of the local handoff to
+%% the client process. `{error, Reason}' means the cast was not handed off.
+-spec try_ordered_cast(destination(), atom() | tuple(), atom() | function(), list()) -> ok | {error, term()}.
+try_ordered_cast(NodeOrTuple, M, F, A) when ?is_node_or_tuple(NodeOrTuple), is_atom(M) orelse is_tuple(M), is_atom(F), is_list(A) ->
+    handoff(NodeOrTuple, ?ORDERED_CAST(M, F, A), undefined).
 
 %% Evaluate {M, F, A} on connected nodes.
 -spec eval_everywhere([atom()], atom() | tuple(), atom() | function()) -> abcast.
@@ -459,6 +465,10 @@ send_ping(#state{socket=Socket, driver=Driver, driver_mod=DriverMod} = State) ->
     end.
 
 cast_worker(NodeOrTuple, Cast, Ret, SendTimeout) ->
+    _ = handoff(NodeOrTuple, Cast, SendTimeout),
+    Ret.
+
+handoff(NodeOrTuple, Cast, SendTimeout) ->
     %% Create a unique name for the client because we register as such
     PidName = ?NAME(NodeOrTuple),
     ?tp(gen_rpc_input, #{ input => Cast
@@ -475,14 +485,14 @@ cast_worker(NodeOrTuple, Cast, Ret, SendTimeout) ->
                     %% This is not resilient enough if the caller's mailbox is full
                     %% but it's good enough for now
                     erlang:send(NewPid, {Cast, SendTimeout}),
-                    Ret;
-                {error, _Reason} ->
-                    Ret
+                    ok;
+                {error, Reason} ->
+                    {error, Reason}
             end;
         Pid ->
             ?tp(debug, gen_rpc_client_process_found, #{pid => Pid, target => NodeOrTuple}),
             erlang:send(Pid, {Cast, SendTimeout}),
-            Ret
+            ok
     end.
 
 async_call_worker(NodeOrTuple, M, F, A, Ref) ->
