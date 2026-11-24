@@ -43,22 +43,7 @@
 
 -type port_number() :: 0..65535.
 
-%% Packets
-%% Client challenge:
--record(gen_rpc_authenticate_c,
-        { challenge :: challenge()
-        }).
-
-%% Server response + client challenge
--record(gen_rpc_authenticate_cr,
-        { response  :: binary()
-        , challenge :: challenge()
-        }).
-
-%% Client response to the challenge:
--record(gen_rpc_authenticate_r,
-        { response  :: binary()
-        }).
+%% The packets are built and parsed by `gen_rpc_auth_proto'.
 
 -define(UNAUTHORIZED, {badrpc, invalid_cookie}).
 
@@ -74,11 +59,6 @@
 -define(MIN_CHALLENGE_SIZE, 8).
 -define(MAX_CHALLENGE_SIZE, 128).
 
-%% External term format: version byte 131 followed by the compressed-term
-%% tag 80. A compressed term can expand far beyond its encoded size, so it
-%% is refused before decoding, regardless of the encoded-size limit above.
--define(COMPRESSED_TERM(Rest), <<131, 80, Rest/binary>>).
-
 -define(IS_STAGE2_CHALLENGE(Challenge),
         (is_binary(Challenge) andalso byte_size(Challenge) =/= ?SERVER_CHALLENGE_SIZE)).
 
@@ -86,8 +66,6 @@
                     | ?BADPACKET           %% Bad packet
                     | ?UNAUTHORIZED        %% Bad cookie
                     | ?BADNODE.            %% Tried to connect to a wrong node
-
--define(NODE_SIZE_BITS, 16).
 
 %%================================================================================
 %% API
@@ -109,8 +87,6 @@ authenticate_client(Driver, Socket, Peer) ->
 do_authenticate_client(Driver, Socket, Peer) ->
     RecvTimeout = gen_rpc_helper:get_authentication_timeout(),
     case Driver:recv(Socket, 0, RecvTimeout) of
-        {ok, ?COMPRESSED_TERM(_)} ->
-            {error, ?BADPACKET};
         {ok, Data} when byte_size(Data) =< ?MAX_AUTH_PACKET_SIZE ->
             authenticate_client_cr(Driver, Socket, Data);
         {ok, _Data} ->
@@ -171,7 +147,7 @@ authenticate_client_cr(Driver, Socket, Data) ->
                 ?tp(debug, gen_rpc_authentication_stage, #{stage => 4, socket => Socket, peer => Peer, result => Result, domain => ?D_AUTH}),
                 Result;
             {error, ?BADNODE} = Error ->
-                send(Driver, Socket, term_to_binary(Error), challenge_error),
+                send(Driver, Socket, gen_rpc_auth_proto:encode(badnode), challenge_error),
                 Error;
             Error ->
                 Error
@@ -196,8 +172,6 @@ authenticate_client_cr(Driver, Socket, Data) ->
 recv(Driver, Socket, Meta) ->
     RecvTimeout = gen_rpc_helper:get_call_receive_timeout(undefined),
     case Driver:recv(Socket, 0, RecvTimeout) of
-        {ok, ?COMPRESSED_TERM(_)} ->
-            throw({badtcp, recv, Meta, compressed});
         {ok, Packet} when byte_size(Packet) =< ?MAX_AUTH_PACKET_SIZE ->
             Packet;
         {ok, _Packet} ->
@@ -281,32 +255,21 @@ stage4(MyChallenge, Packet) ->
 
 -spec stage2(secret(), packet()) -> {ok, {challenge(), packet()}} | {error, auth_error()}.
 stage2(Secret, Packet) ->
-    try erlang:binary_to_term(Packet, [safe, used]) of
-        {#gen_rpc_authenticate_c{challenge = Challenge}, Used}
-          when ?IS_STAGE2_CHALLENGE(Challenge) ->
-            case split_binary(Packet, Used) of
-                {_, <<>>} ->
-                    %% Old style of challenge packet that doesn't
-                    %% include the node name. We just hope the client
-                    %% knows where it's going:
-                    ?tp(gen_rpc_auth_cr_v1_fallback, #{}),
+    case gen_rpc_auth_proto:decode(Packet) of
+        {ok, {challenge, Challenge, undefined}} when ?IS_STAGE2_CHALLENGE(Challenge) ->
+            %% Old style of challenge packet that doesn't
+            %% include the node name. We just hope the client
+            %% knows where it's going:
+            ?tp(gen_rpc_auth_cr_v1_fallback, #{}),
+            {ok, make_cr(Secret, Challenge)};
+        {ok, {challenge, Challenge, Node}} when ?IS_STAGE2_CHALLENGE(Challenge) ->
+            case Node =:= atom_to_binary(node(), utf8) of
+                true ->
                     {ok, make_cr(Secret, Challenge)};
-                {_, <<Size:?NODE_SIZE_BITS, NodeBin:Size/bytes, _/binary>>} ->
-                    case NodeBin =:= atom_to_binary(node(), utf8) of
-                        true ->
-                            {ok, make_cr(Secret, Challenge)};
-                        false ->
-                            {error, ?BADNODE}
-                    end;
-                _ ->
-                    ?log(error, "authentication_stage2_invalid_packet",
-                         #{packet => Packet}),
-                    {error, ?BADPACKET}
+                false ->
+                    {error, ?BADNODE}
             end;
-        _Badterm ->
-            {error, ?BADPACKET}
-    catch
-        _:_ ->
+        _Badpacket ->
             {error, ?BADPACKET}
     end.
 
@@ -330,65 +293,46 @@ stage4(Secret, MyChallenge, Packet) ->
 -spec make_c(node()) -> {challenge(), packet()}.
 make_c(Node) ->
     Challenge = rand_bytes(),
-    Part1 = erlang:term_to_binary(#gen_rpc_authenticate_c{challenge = Challenge}),
-    Part2 = atom_to_binary(Node, utf8),
-    Size = size(Part2),
-    %% Node name should be at most 255 characters in length, but it
-    %% may include utf8 characters, which are at most 4 bytes in size.
-    %% That give us maximum binary size of 1024 bytes, that should fit
-    %% in 10 bits. So two bytes should be enough to encode the `Size':
-    true = Size < (1 bsl ?NODE_SIZE_BITS), % assert
-    {Challenge, <<Part1/binary, Size:?NODE_SIZE_BITS, Part2/binary>>}.
+    Packet = gen_rpc_auth_proto:encode({challenge, Challenge, atom_to_binary(Node, utf8)}),
+    {Challenge, Packet}.
 
 -spec make_cr(secret(), challenge()) -> {challenge(), packet()}.
 make_cr(Secret, Challenge) ->
     NewChallenge = crypto:strong_rand_bytes(?SERVER_CHALLENGE_SIZE),
-    Term = #gen_rpc_authenticate_cr{
-              challenge = NewChallenge,
-              response  = response(Secret, Challenge)
-             },
-    {NewChallenge, erlang:term_to_binary(Term)}.
+    Response = response(Secret, Challenge),
+    {NewChallenge, gen_rpc_auth_proto:encode({challenge_response, Response, NewChallenge})}.
 
 -spec check_cr(secret(), challenge(), packet()) -> {ok, challenge()} | {error, auth_error()}.
 check_cr(Secret, MyChallenge, Packet) ->
-    try erlang:binary_to_term(Packet, [safe]) of
-        #gen_rpc_authenticate_cr{response = Response, challenge = NewChallenge} ->
+    case gen_rpc_auth_proto:decode(Packet) of
+        {ok, {challenge_response, Response, NewChallenge}} ->
             case check_response(Secret, MyChallenge, Response) of
                 true ->
                     {ok, NewChallenge};
                 false ->
                     {error, ?UNAUTHORIZED}
             end;
-        {error, ?BADNODE} = Error ->
-            Error;
-        _Badarg ->
-            {error, ?BADPACKET}
-    catch
-        _:_ ->
+        {ok, badnode} ->
+            {error, ?BADNODE};
+        _Badpacket ->
             {error, ?BADPACKET}
     end.
 
 -spec make_r(binary(), binary()) -> binary().
 make_r(Secret, Challenge) ->
-    Term = #gen_rpc_authenticate_r{
-              response = response(Secret, Challenge)
-             },
-    erlang:term_to_binary(Term).
+    gen_rpc_auth_proto:encode({response, response(Secret, Challenge)}).
 
 -spec check_r(binary(), binary(), binary()) -> ok | {error, auth_error()}.
 check_r(Secret, Challenge, Packet) ->
-    try erlang:binary_to_term(Packet, [safe]) of
-        #gen_rpc_authenticate_r{response = Response} ->
+    case gen_rpc_auth_proto:decode(Packet) of
+        {ok, {response, Response}} ->
             case check_response(Secret, Challenge, Response) of
                 true ->
                     ok;
                 false ->
                     {error, ?UNAUTHORIZED}
             end;
-        _Badarg ->
-            {error, ?BADPACKET}
-    catch
-        _:_ ->
+        _Badpacket ->
             {error, ?BADPACKET}
     end.
 
@@ -453,8 +397,7 @@ get_cookie() ->
 -spec make_c_v1() -> {challenge(), packet()}.
 make_c_v1() ->
     Challenge = rand_bytes(),
-    Term = #gen_rpc_authenticate_c{challenge = Challenge},
-    {Challenge, erlang:term_to_binary(Term)}.
+    {Challenge, gen_rpc_auth_proto:encode({challenge, Challenge, undefined})}.
 
 -spec stage1_v1() -> {challenge(), packet()}.
 stage1_v1() ->
@@ -463,7 +406,7 @@ stage1_v1() ->
 %% Build a v1 (no node name) initiator packet carrying an arbitrary
 %% challenge term, as a peer would send it to the acceptor's stage2.
 mk_c_packet(Challenge) ->
-    erlang:term_to_binary(#gen_rpc_authenticate_c{challenge = Challenge}).
+    erlang:term_to_binary({gen_rpc_authenticate_c, Challenge}).
 
 rand_bytes_test() ->
     ?assert(is_binary(rand_bytes())).
@@ -497,8 +440,7 @@ stage2_rejects_non_binary_test() ->
 %% Drive authenticate_client/3 over a mocked driver with a valid handshake
 %% term in both encodings. The plain request must reach the next stage (the
 %% acceptor replies with a challenge-response); the compressed request must be
-%% refused before decoding, with no reply sent. Dropping the compressed guard
-%% makes the compressed case decode and reply, so the test then fails.
+%% refused, with no reply sent. A compressed packet is never decompressed.
 authenticate_client_recv_path_test_() ->
     {foreach, fun mock_driver_setup/0, fun mock_driver_cleanup/1,
      [ {"plain handshake reaches the challenge-response stage",
@@ -509,17 +451,17 @@ authenticate_client_recv_path_test_() ->
                 %% acceptor has replied to the peer's challenge:
                 ?assertMatch({error, {badtcp, closed}},
                              authenticate_client(mock_driver, socket, peer)),
-                ?assertMatch([#gen_rpc_authenticate_cr{}], sent_terms())
+                ?assertMatch([{challenge_response, _, _}], sent_packets())
         end},
-       {"compressed handshake is refused before decoding",
+       {"compressed handshake is refused",
         fun() ->
                 %% A valid handshake term whose binary form starts with the
                 %% compressed-term tag and stays under the encoded-size limit,
                 %% yet decodes to more than 1 MiB:
                 Big = binary:copy(<<0>>, 1 bsl 20),
-                Packet = erlang:term_to_binary(#gen_rpc_authenticate_c{challenge = Big},
+                Packet = erlang:term_to_binary({gen_rpc_authenticate_c, Big},
                                                [compressed]),
-                ?assertMatch(?COMPRESSED_TERM(_), Packet),
+                ?assertMatch(<<131, 80, _/binary>>, Packet),
                 ?assert(byte_size(Packet) =< ?MAX_AUTH_PACKET_SIZE),
                 scripted_recv([{ok, Packet}, {error, closed}]),
                 ?assertEqual({error, ?BADPACKET},
@@ -548,8 +490,11 @@ mock_driver_cleanup(_) ->
 scripted_recv(Seq) ->
     meck:expect(mock_driver, recv, 3, meck:seq(Seq)).
 
-sent_terms() ->
-    [erlang:binary_to_term(Sent)
+sent_packets() ->
+    [begin
+         {ok, Packet} = gen_rpc_auth_proto:decode(Sent),
+         Packet
+     end
      || {_Pid, {mock_driver, send, [_Socket, Sent]}, _Ret} <- meck:history(mock_driver)].
 
 compare_binaries_test() ->
@@ -723,7 +668,7 @@ scripted_handshake() ->
                   0 ->
                       {ok, Challenge};
                   _ ->
-                      [#gen_rpc_authenticate_cr{challenge = ServerChallenge}] = sent_terms(),
+                      [{challenge_response, _, ServerChallenge}] = sent_packets(),
                       {ok, make_r(?TEST_COOKIE, ServerChallenge)}
               end
       end).
