@@ -34,6 +34,10 @@ Below is a non-exhaustive list of changes between `gen_rpc` versions.
     still contains pre-3.0.0 nodes must upgrade them to a 3.x release before upgrading
     to 4.0.0.
 
+## 3.6.4
+
+- Decode authentication packets with a dedicated decoder. It accepts only the terms that these packets are made of: atoms, binaries, strings and small tuples. The packet format does not change.
+
 ## 3.6.3
 
 - Use a reserved size for the challenge issued by the responding side, and reject peer challenges of that size.
@@ -53,6 +57,10 @@ Below is a non-exhaustive list of changes between `gen_rpc` versions.
 
 - Support compression when serializing Erlang term to binary.
 - Add `gen_rpc:check_server_ports_available/0` to help checking if `Address:Port` is in use.
+
+## 3.5.4
+
+- Decode authentication packets with a dedicated decoder. It accepts only the terms that these packets are made of: atoms, binaries, strings and small tuples. The packet format does not change.
 
 ## 3.5.3
 
