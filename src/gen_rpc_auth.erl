@@ -74,11 +74,6 @@
 -define(MIN_CHALLENGE_SIZE, 8).
 -define(MAX_CHALLENGE_SIZE, 128).
 
-%% External term format: version byte 131 followed by the compressed-term
-%% tag 80. A compressed term can expand far beyond its encoded size, so it
-%% is refused before decoding, regardless of the encoded-size limit above.
--define(COMPRESSED_TERM(Rest), <<131, 80, Rest/binary>>).
-
 -define(IS_STAGE2_CHALLENGE(Challenge),
         (is_binary(Challenge) andalso byte_size(Challenge) =/= ?SERVER_CHALLENGE_SIZE)).
 
@@ -88,6 +83,13 @@
                     | ?BADNODE.            %% Tried to connect to a wrong node
 
 -define(NODE_SIZE_BITS, 16).
+
+%% Authentication packets are made of atoms, binaries, strings and small
+%% tuples of those. These are the limits of what `decode_packet/1' accepts.
+%% Deepest tuple nesting: `{error, {badrpc, badnode}}'.
+-define(MAX_PACKET_TUPLE_DEPTH, 2).
+%% Largest tuple: #gen_rpc_authenticate_cr{}.
+-define(MAX_PACKET_TUPLE_ARITY, 3).
 
 %%================================================================================
 %% API
@@ -123,8 +125,6 @@ do_authenticate_client(Driver, Socket, Peer) ->
     RecvTimeout = gen_rpc_helper:get_authentication_timeout(),
     Fallback = insecure_fallback_allowed(),
     case Driver:recv(Socket, 0, RecvTimeout) of
-        {ok, ?COMPRESSED_TERM(_)} ->
-            {error, ?BADPACKET};
         {ok, Data} when byte_size(Data) =< ?MAX_AUTH_PACKET_SIZE ->
             case authenticate_client_cr(Driver, Socket, Data) of
                 {error, ?BADPACKET} when Fallback ->
@@ -233,21 +233,20 @@ authenticate_server_insecure(Driver, _Node, Socket) ->
         %% Wait for the reply:
         RecvPacket = recv(Driver, Socket, insecure_response),
         ?tp(gen_rpc_auth_server_insecure_recv, #{socket => Socket, response => RecvPacket}),
-        try erlang:binary_to_term(RecvPacket, [safe]) of
-            gen_rpc_connection_authenticated ->
+        case decode_packet(RecvPacket) of
+            {ok, gen_rpc_connection_authenticated, _Rest} ->
                 ok;
-            {gen_rpc_connection_rejected, invalid_cookie} ->
+            {ok, {gen_rpc_connection_rejected, invalid_cookie}, _Rest} ->
                 ?log(error, "authentication_rejected",
                      #{socket => gen_rpc_helper:socket_to_string(Socket),
                        cause => invalid_cookie}),
                 {error, ?UNAUTHORIZED};
-            _Else ->
+            {ok, _Else, _Rest} ->
                 ?log(error, "authentication_reception_error",
                      #{socket => gen_rpc_helper:socket_to_string(Socket),
                        cause => invalid_payload}),
-                {error, ?BADPACKET}
-        catch
-            error:badarg ->
+                {error, ?BADPACKET};
+            error ->
                 {error, ?BADPACKET}
         end
     catch
@@ -267,28 +266,27 @@ authenticate_server_insecure(Driver, _Node, Socket) ->
 authenticate_client_insecure(Driver, Socket, Peer, Data) ->
     Cookie = get_cookie_atom(),
     CheckResult =
-        try erlang:binary_to_term(Data, [safe]) of
-            {gen_rpc_authenticate_connection, Cookie} ->
+        case decode_packet(Data) of
+            {ok, {gen_rpc_authenticate_connection, Cookie}, _Rest} ->
                 ok;
-            {gen_rpc_authenticate_connection, _Node, Cookie} ->
+            {ok, {gen_rpc_authenticate_connection, _Node, Cookie}, _Rest} ->
                 %% Old authentication packet sent by SSL driver
                 ok;
-            {gen_rpc_authenticate_connection, _InvalidCookie} ->
+            {ok, {gen_rpc_authenticate_connection, _InvalidCookie}, _Rest} ->
                 %% Note: this case may not actually trigger, since
-                %% `binary_to_term' runs with `safe' option, so
+                %% `decode_packet/1' never creates an atom, so
                 %% instead of `invalid_cookie' the error code becomes
                 %% `corrupt_data'. But it's more secure, since it
                 %% prevents atom table DOS attack.
                 invalid_cookie;
-            {gen_rpc_authenticate_connection, _Node, _InvalidCookie} ->
+            {ok, {gen_rpc_authenticate_connection, _Node, _InvalidCookie}, _Rest} ->
                 %% Note: same problem as above
                 %%
                 %% Old authentication packet sent by SSL driver
                 invalid_cookie;
-            _ ->
-                erroneous_data
-        catch
-            error:badarg ->
+            {ok, _Term, _Rest} ->
+                erroneous_data;
+            error ->
                 corrupt_data
         end,
     LogLevel = case CheckResult of
@@ -329,8 +327,6 @@ authenticate_client_insecure(Driver, Socket, Peer, Data) ->
 recv(Driver, Socket, Meta) ->
     RecvTimeout = gen_rpc_helper:get_call_receive_timeout(undefined),
     case Driver:recv(Socket, 0, RecvTimeout) of
-        {ok, ?COMPRESSED_TERM(_)} ->
-            throw({badtcp, recv, Meta, compressed});
         {ok, Packet} when byte_size(Packet) =< ?MAX_AUTH_PACKET_SIZE ->
             Packet;
         {ok, _Packet} ->
@@ -414,17 +410,17 @@ stage4(MyChallenge, Packet) ->
 
 -spec stage2(secret(), packet()) -> {ok, {challenge(), packet()}} | {error, auth_error()}.
 stage2(Secret, Packet) ->
-    try erlang:binary_to_term(Packet, [safe, used]) of
-        {#gen_rpc_authenticate_c{challenge = Challenge}, Used}
+    case decode_packet(Packet) of
+        {ok, #gen_rpc_authenticate_c{challenge = Challenge}, Rest}
           when ?IS_STAGE2_CHALLENGE(Challenge) ->
-            case split_binary(Packet, Used) of
-                {_, <<>>} ->
+            case Rest of
+                <<>> ->
                     %% Old style of challenge packet that doesn't
                     %% include the node name. We just hope the client
                     %% knows where it's going:
                     ?tp(gen_rpc_auth_cr_v1_fallback, #{}),
                     {ok, make_cr(Secret, Challenge)};
-                {_, <<Size:?NODE_SIZE_BITS, NodeBin:Size/bytes, _/binary>>} ->
+                <<Size:?NODE_SIZE_BITS, NodeBin:Size/bytes, _/binary>> ->
                     case NodeBin =:= atom_to_binary(node(), utf8) of
                         true ->
                             {ok, make_cr(Secret, Challenge)};
@@ -436,10 +432,7 @@ stage2(Secret, Packet) ->
                          #{packet => Packet}),
                     {error, ?BADPACKET}
             end;
-        _Badterm ->
-            {error, ?BADPACKET}
-    catch
-        _:_ ->
+        _Badpacket ->
             {error, ?BADPACKET}
     end.
 
@@ -484,20 +477,18 @@ make_cr(Secret, Challenge) ->
 
 -spec check_cr(secret(), challenge(), packet()) -> {ok, challenge()} | {error, auth_error()}.
 check_cr(Secret, MyChallenge, Packet) ->
-    try erlang:binary_to_term(Packet, [safe]) of
-        #gen_rpc_authenticate_cr{response = Response, challenge = NewChallenge} ->
+    case decode_packet(Packet) of
+        {ok, #gen_rpc_authenticate_cr{response = Response, challenge = NewChallenge}, _Rest}
+          when is_binary(Response), is_binary(NewChallenge) ->
             case check_response(Secret, MyChallenge, Response) of
                 true ->
                     {ok, NewChallenge};
                 false ->
                     {error, ?UNAUTHORIZED}
             end;
-        {error, ?BADNODE} = Error ->
+        {ok, {error, ?BADNODE} = Error, _Rest} ->
             Error;
-        _Badarg ->
-            {error, ?BADPACKET}
-    catch
-        _:_ ->
+        _Badpacket ->
             {error, ?BADPACKET}
     end.
 
@@ -510,20 +501,122 @@ make_r(Secret, Challenge) ->
 
 -spec check_r(binary(), binary(), binary()) -> ok | {error, auth_error()}.
 check_r(Secret, Challenge, Packet) ->
-    try erlang:binary_to_term(Packet, [safe]) of
-        #gen_rpc_authenticate_r{response = Response} ->
+    case decode_packet(Packet) of
+        {ok, #gen_rpc_authenticate_r{response = Response}, _Rest}
+          when is_binary(Response) ->
             case check_response(Secret, Challenge, Response) of
                 true ->
                     ok;
                 false ->
                     {error, ?UNAUTHORIZED}
             end;
-        _Badarg ->
-            {error, ?BADPACKET}
-    catch
-        _:_ ->
+        _Badpacket ->
             {error, ?BADPACKET}
     end.
+
+%% Decode an authentication packet. The packets are made of atoms, binaries,
+%% strings and small tuples of those, in the external term format. They are
+%% decoded here and not with `binary_to_term/2', which accepts every kind of
+%% term: a peer that is not authenticated yet can send these shapes only, and
+%% anything else is refused. An atom is never created, like with the `safe'
+%% option of `binary_to_term/2'. The bytes after the term are returned, like
+%% with its `used' option. A caller ignores the bytes that it does not know,
+%% so that a later release can add data after the term, as was done with the
+%% node name after the challenge.
+-spec decode_packet(packet()) -> {ok, term(), Rest :: binary()} | error.
+decode_packet(Packet) ->
+    case byte_at(Packet, 0) of
+        131 ->
+            case decode_term(Packet, 1, ?MAX_PACKET_TUPLE_DEPTH) of
+                {ok, Term, End} ->
+                    {ok, Term, binary:part(Packet, End, byte_size(Packet) - End)};
+                error ->
+                    error
+            end;
+        _ ->
+            error
+    end.
+
+%% Decode the term that starts at byte `Pos' of the packet. Returns the term
+%% and the position of the first byte after it. `RemainingDepth' is how many
+%% more levels of tuples may follow.
+decode_term(Packet, Pos, RemainingDepth) ->
+    case byte_at(Packet, Pos) of
+        %% SMALL_TUPLE_EXT. No authentication packet has an empty tuple.
+        104 when RemainingDepth > 0 ->
+            case byte_at(Packet, Pos + 1) of
+                Arity when is_integer(Arity), Arity > 0, Arity =< ?MAX_PACKET_TUPLE_ARITY ->
+                    decode_elements(Arity, Packet, Pos + 2, RemainingDepth - 1, []);
+                _ ->
+                    error
+            end;
+        %% BINARY_EXT
+        109 ->
+            decode_sized(Packet, Pos + 1, 4, binary);
+        %% SMALL_ATOM_UTF8_EXT
+        119 ->
+            decode_sized(Packet, Pos + 1, 1, utf8);
+        %% ATOM_UTF8_EXT
+        118 ->
+            decode_sized(Packet, Pos + 1, 2, utf8);
+        %% SMALL_ATOM_EXT, sent by older Erlang/OTP releases
+        115 ->
+            decode_sized(Packet, Pos + 1, 1, latin1);
+        %% ATOM_EXT, sent by older Erlang/OTP releases
+        100 ->
+            decode_sized(Packet, Pos + 1, 2, latin1);
+        %% STRING_EXT: the node name in the packet of an old TLS client
+        107 ->
+            decode_sized(Packet, Pos + 1, 2, string);
+        _ ->
+            error
+    end.
+
+decode_elements(N, _Packet, Pos, _RemainingDepth, Acc) when N =< 0 ->
+    {ok, list_to_tuple(lists:reverse(Acc)), Pos};
+decode_elements(N, Packet, Pos, RemainingDepth, Acc) ->
+    case decode_term(Packet, Pos, RemainingDepth) of
+        {ok, Term, End} ->
+            decode_elements(N - 1, Packet, End, RemainingDepth, [Term | Acc]);
+        error ->
+            error
+    end.
+
+%% Decode a size field of `SizeBytes' bytes at `Pos' and the data of that
+%% size after it: a binary, a string, or the name of an atom in the given
+%% encoding.
+decode_sized(Packet, Pos, SizeBytes, Type) ->
+    DataPos = Pos + SizeBytes,
+    case DataPos =< byte_size(Packet) of
+        true ->
+            Size = binary:decode_unsigned(binary:part(Packet, Pos, SizeBytes)),
+            End = DataPos + Size,
+            case End =< byte_size(Packet) of
+                true ->
+                    decode_data(binary:part(Packet, DataPos, Size), Type, End);
+                false ->
+                    error
+            end;
+        false ->
+            error
+    end.
+
+decode_data(Bin, binary, End) ->
+    {ok, Bin, End};
+decode_data(Bin, string, End) ->
+    {ok, binary_to_list(Bin), End};
+decode_data(Name, Encoding, End) ->
+    try
+        {ok, binary_to_existing_atom(Name, Encoding), End}
+    catch
+        error:badarg ->
+            error
+    end.
+
+byte_at(Packet, Pos) when Pos < byte_size(Packet) ->
+    binary:at(Packet, Pos);
+byte_at(_Packet, _Pos) ->
+    eof.
 
 -spec response(binary(), binary()) -> binary().
 response(Secret, Challenge) ->
@@ -641,8 +734,7 @@ stage2_rejects_non_binary_test() ->
 %% Drive authenticate_client/3 over a mocked driver with a valid handshake
 %% term in both encodings. The plain request must reach the next stage (the
 %% acceptor replies with a challenge-response); the compressed request must be
-%% refused before decoding, with no reply sent. Dropping the compressed guard
-%% makes the compressed case decode and reply, so the test then fails.
+%% refused, with no reply sent. A compressed packet is never decompressed.
 authenticate_client_recv_path_test_() ->
     {foreach, fun mock_driver_setup/0, fun mock_driver_cleanup/1,
      [ {"plain handshake reaches the challenge-response stage",
@@ -655,7 +747,7 @@ authenticate_client_recv_path_test_() ->
                              authenticate_client(mock_driver, socket, peer)),
                 ?assertMatch([#gen_rpc_authenticate_cr{}], sent_terms())
         end},
-       {"compressed handshake is refused before decoding",
+       {"compressed handshake is refused",
         fun() ->
                 %% A valid handshake term whose binary form starts with the
                 %% compressed-term tag and stays under the encoded-size limit,
@@ -663,7 +755,7 @@ authenticate_client_recv_path_test_() ->
                 Big = binary:copy(<<0>>, 1 bsl 20),
                 Packet = erlang:term_to_binary(#gen_rpc_authenticate_c{challenge = Big},
                                                [compressed]),
-                ?assertMatch(?COMPRESSED_TERM(_), Packet),
+                ?assertMatch(<<131, 80, _/binary>>, Packet),
                 ?assert(byte_size(Packet) =< ?MAX_AUTH_PACKET_SIZE),
                 scripted_recv([{ok, Packet}, {error, closed}]),
                 ?assertEqual({error, ?BADPACKET},
@@ -695,6 +787,166 @@ scripted_recv(Seq) ->
 sent_terms() ->
     [erlang:binary_to_term(Sent)
      || {_Pid, {mock_driver, send, [_Socket, Sent]}, _Ret} <- meck:history(mock_driver)].
+
+%% Every authentication packet that this module sends decodes to the term
+%% that binary_to_term/2 gives for it, with the same remaining bytes.
+decode_packet_own_packets_test() ->
+    Secret = <<"cookie">>,
+    {Challenge, C} = make_c(node()),
+    {_, Cv1} = make_c_v1(),
+    {ServerChallenge, CR} = make_cr(Secret, Challenge),
+    R = make_r(Secret, ServerChallenge),
+    Packets = [ C, Cv1, CR, R
+              , term_to_binary({error, ?BADNODE})
+              , term_to_binary({gen_rpc_authenticate_connection, cookie})
+              , term_to_binary({gen_rpc_authenticate_connection, node(), cookie})
+              , term_to_binary({gen_rpc_authenticate_connection, atom_to_list(node()), cookie})
+              , term_to_binary(gen_rpc_connection_authenticated)
+              , term_to_binary({gen_rpc_connection_rejected, invalid_cookie})
+              ],
+    lists:foreach(
+      fun(Packet) ->
+              ?assertEqual(reference_decode(Packet), decode_packet(Packet))
+      end,
+      Packets).
+
+%% Erlang/OTP releases differ in how they encode an atom. All four atom
+%% encodings are accepted, so peers on other releases can still authenticate.
+decode_packet_atom_encodings_test() ->
+    Name = <<"gen_rpc_authenticate_c">>,
+    Size = byte_size(Name),
+    Challenge = crypto:strong_rand_bytes(?MIN_CHALLENGE_SIZE),
+    Atoms = [ <<119, Size, Name/binary>>
+            , <<118, Size:16, Name/binary>>
+            , <<115, Size, Name/binary>>
+            , <<100, Size:16, Name/binary>>
+            ],
+    lists:foreach(
+      fun(Atom) ->
+              Packet = <<131, 104, 2, Atom/binary,
+                         109, (byte_size(Challenge)):32, Challenge/binary>>,
+              ?assertEqual({ok, #gen_rpc_authenticate_c{challenge = Challenge}, <<>>},
+                           decode_packet(Packet)),
+              ?assertMatch({ok, {_, _}}, stage2(<<"cookie">>, Packet))
+      end,
+      Atoms).
+
+%% Only atoms, binaries, strings and small tuples of those are decoded. Any
+%% other term is refused, although binary_to_term/2 accepts it.
+decode_packet_refuses_other_terms_test() ->
+    Terms = [ 1, -1, 1 bsl 64, 1.0, [], [a], [256], <<1:1>>, #{}, #{a => b}
+            , self(), make_ref(), fun erlang:node/0
+            , {a, [<<"b">>]}
+            , {}            %% fewer elements than any authentication packet
+            , {a, b, c, d}  %% more elements than any authentication packet
+            , {a, {b, {c}}} %% deeper than any authentication packet
+            ],
+    lists:foreach(
+      fun(Term) ->
+              Packet = term_to_binary(Term),
+              ?assertEqual(Term, binary_to_term(Packet, [safe])),
+              ?assertEqual(error, decode_packet(Packet))
+      end,
+      Terms).
+
+%% An authentication packet is accepted in its plain encoding only. The same
+%% term with a large tuple header, or compressed, is refused, although
+%% binary_to_term/2 accepts both.
+decode_packet_refuses_other_encodings_test() ->
+    Secret = <<"cookie">>,
+    Term = #gen_rpc_authenticate_c{challenge = binary:copy(<<1>>, ?MAX_CHALLENGE_SIZE)},
+    Plain = term_to_binary(Term),
+    {<<131, 104, 2>>, Elements} = split_binary(Plain, 3),
+    LargeTuple = <<131, 105, 2:32, Elements/binary>>,
+    Compressed = term_to_binary(Term, [compressed]),
+    ?assertMatch(<<131, 80, _/binary>>, Compressed),
+    ?assertMatch({ok, {_, _}}, stage2(Secret, Plain)),
+    lists:foreach(
+      fun(Packet) ->
+              ?assertEqual(Term, binary_to_term(Packet, [safe])),
+              ?assertEqual(error, decode_packet(Packet)),
+              ?assertEqual({error, ?BADPACKET}, stage2(Secret, Packet))
+      end,
+      [LargeTuple, Compressed]).
+
+%% Truncated and malformed packets are refused without an exception.
+decode_packet_malformed_test() ->
+    {_, Packet} = make_c_v1(),
+    lists:foreach(
+      fun(Size) ->
+              ?assertEqual(error, decode_packet(binary:part(Packet, 0, Size)))
+      end,
+      lists:seq(0, byte_size(Packet) - 1)),
+    {<<131>>, Body} = split_binary(Packet, 1),
+    ?assertEqual(error, decode_packet(Body)),
+    ?assertEqual(error, decode_packet(<<130, Body/binary>>)).
+
+%% An atom that does not exist is refused, and it is not created.
+decode_packet_unknown_atom_test() ->
+    Unique = integer_to_binary(erlang:unique_integer([positive])),
+    Name = <<"gen_rpc_auth_no_such_atom_", Unique/binary>>,
+    lists:foreach(
+      fun(Packet) ->
+              ?assertEqual(error, decode_packet(Packet)),
+              ?assertError(badarg, binary_to_existing_atom(Name, utf8))
+      end,
+      [ <<131, 119, (byte_size(Name)), Name/binary>>
+      , <<131, 100, (byte_size(Name)):16, Name/binary>>
+      ]).
+
+%% decode_packet/1 never raises. When it accepts a packet, it returns what
+%% binary_to_term/2 returns for it.
+decode_packet_prop() ->
+    ?FORALL(Packet, oneof([auth_packet(), mutated_auth_packet(), binary()]),
+            case decode_packet(Packet) of
+                error ->
+                    true;
+                Decoded ->
+                    Decoded =:= reference_decode(Packet)
+            end).
+
+decode_packet_test() ->
+    ?assert(proper:quickcheck(decode_packet_prop(), 2000)).
+
+%% What binary_to_term/2 makes of a packet, in the shape of decode_packet/1.
+reference_decode(Packet) ->
+    {Term, Used} = binary_to_term(Packet, [safe, used]),
+    {_, Rest} = split_binary(Packet, Used),
+    {ok, Term, Rest}.
+
+auth_packet() ->
+    ?LET({Term, Rest}, {auth_term(?MAX_PACKET_TUPLE_DEPTH), binary()},
+         <<(term_to_binary(Term))/binary, Rest/binary>>).
+
+auth_term(0) ->
+    oneof([auth_atom(), binary(), non_empty(list(byte()))]);
+auth_term(Depth) ->
+    Element = auth_term(Depth - 1),
+    oneof([ auth_atom()
+          , binary()
+          , non_empty(list(byte()))
+          , {}
+          , {Element}
+          , {Element, Element}
+          , {Element, Element, Element}
+          ]).
+
+auth_atom() ->
+    oneof([ gen_rpc_authenticate_c, gen_rpc_authenticate_cr, gen_rpc_authenticate_r
+          , gen_rpc_authenticate_connection, gen_rpc_connection_authenticated
+          , gen_rpc_connection_rejected, invalid_cookie, error, badrpc, badnode
+          , node()
+          ]).
+
+%% An authentication packet with one byte replaced.
+mutated_auth_packet() ->
+    ?LET({Packet, Pos, Byte}, {auth_packet(), non_neg_integer(), byte()},
+         begin
+             HeadSize = Pos rem byte_size(Packet),
+             Head = binary:part(Packet, 0, HeadSize),
+             Tail = binary:part(Packet, HeadSize + 1, byte_size(Packet) - HeadSize - 1),
+             <<Head/binary, Byte, Tail/binary>>
+         end).
 
 compare_binaries_test() ->
     A1 = crypto:hash(sha256, <<"a">>),
