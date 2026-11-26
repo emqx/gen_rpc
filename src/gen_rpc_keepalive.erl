@@ -20,7 +20,7 @@
 
 -author("Feng Lee <feng@emqx.io>").
 
--export([start/3, check/1, cancel/1, resume/1]).
+-export([start/3, check/1, cancel/1, resume/1, set_stat_fun/2]).
 
 -record(keepalive, {statfun :: function() | undefined,
                     statval :: integer() | undefined,
@@ -46,6 +46,10 @@ start(StatFun, TimeoutSec, TimeoutMsg) ->
         {error, Error} ->
             {error, Error}
     end.
+
+-spec(set_stat_fun(keepalive(), fun()) -> keepalive()).
+set_stat_fun(KeepAlive, StatFun) ->
+    KeepAlive#keepalive{statfun = StatFun}.
 
 %% @doc Check keepalive, called when timeout.
 -spec(check(keepalive()) -> {ok, keepalive()} | {error, term()}).
