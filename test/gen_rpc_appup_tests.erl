@@ -9,16 +9,17 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% Load the keepalive helper before the client can migrate its callback.
-%% Versions predating 3.0.6 also need the new gen_rpc API module.
+%% Upgrades to 3.0.6 also need the new gen_rpc API module.
 appup_reloads_changed_modules_test() ->
-    {ok, {_, Up, Down}} = file:script("src/gen_rpc.appup.src", [{'VSN', 'VSN'}]),
+    TargetVsn = "3.0.6",
+    {ok, {TargetVsn, Up, Down}} = file:script("src/gen_rpc.appup.src", [{'VSN', TargetVsn}]),
+    ?assert(lists:keymember("3.0.5", 1, Up)),
     lists:foreach(
       fun(Blocks) ->
+              ?assertNot(lists:keymember(TargetVsn, 1, Blocks)),
               lists:foreach(fun({Vsn, Actions}) -> assert_block(Vsn, Actions) end, Blocks)
       end, [Up, Down]).
 
-assert_block("3.0.6", Actions) ->
-    ?assertEqual([load_module(gen_rpc_keepalive), load_client()], Actions);
 assert_block(<<".*">>, _Actions) ->
     ok;
 assert_block(Vsn, Actions) ->
