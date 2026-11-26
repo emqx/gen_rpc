@@ -249,12 +249,7 @@ init({Node}) ->
             case gen_rpc_auth:connect_with_auth(DriverMod, Node, Port) of
                 {ok, Socket} ->
                     Interval = application:get_env(?APP, keepalive_interval, 60), % 60s
-                    StatFun = fun() ->
-                                      case DriverMod:getstat(Socket, [recv_oct]) of
-                                          {ok, [{recv_oct, RecvOct}]} -> {ok, RecvOct};
-                                          {error, Error}              -> {error, Error}
-                                      end
-                              end,
+                    StatFun = stat_fun(DriverMod, Socket),
                     case gen_rpc_keepalive:start(StatFun, Interval, {keepalive, check}) of
                         {ok, KeepAlive} ->
                             MaxBatchSize = application:get_env(?APP, max_batch_size, 0),
@@ -386,7 +381,10 @@ handle_info(timeout, #state{socket=Socket, driver=Driver} = State) ->
          [Driver, gen_rpc_helper:socket_to_string(Socket)]),
     {stop, normal, State};
 
-handle_info({keepalive, check}, #state{driver=Driver, keepalive=KeepAlive} = State) ->
+handle_info({keepalive, check},
+            #state{driver=Driver, driver_mod=DriverMod, socket=Socket, keepalive=KeepAlive0} = State) ->
+    %% A live client can still hold a local fun from a purged version of this module.
+    KeepAlive = gen_rpc_keepalive:set_stat_fun(KeepAlive0, stat_fun(DriverMod, Socket)),
     case gen_rpc_keepalive:check(KeepAlive) of
         {ok, KeepAlive1} ->
             {noreply, State#state{keepalive=KeepAlive1}, gen_rpc_helper:get_inactivity_timeout(?MODULE)};
@@ -446,6 +444,14 @@ send_cast(PacketTuple, #state{socket=Socket, driver=Driver, driver_mod=DriverMod
             ?log(debug, "message=cast event=transmission_succeeded driver=~s socket=\"~s\"",
                  [Driver, gen_rpc_helper:socket_to_string(Socket)]),
             {noreply, State, gen_rpc_helper:get_inactivity_timeout(?MODULE)}
+    end.
+
+stat_fun(DriverMod, Socket) ->
+    fun() ->
+        case DriverMod:getstat(Socket, [recv_oct]) of
+            {ok, [{recv_oct, RecvOct}]} -> {ok, RecvOct};
+            {error, Reason} -> {error, Reason}
+        end
     end.
 
 send_ping(#state{socket=Socket, driver=Driver, driver_mod=DriverMod} = State) ->

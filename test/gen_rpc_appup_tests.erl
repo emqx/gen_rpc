@@ -8,9 +8,8 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
-%% gen_rpc.erl and gen_rpc_client.erl change in 3.0.6, so every upgrade from
-%% an older 3.0.x release must reload both modules. Upgrading from 3.0.6 has
-%% no module changes and must not restart the application.
+%% Load the keepalive helper before the client can migrate its callback.
+%% Versions predating 3.0.6 also need the new gen_rpc API module.
 appup_reloads_changed_modules_test() ->
     {ok, {_, Up, Down}} = file:script("src/gen_rpc.appup.src", [{'VSN', 'VSN'}]),
     lists:foreach(
@@ -19,12 +18,16 @@ appup_reloads_changed_modules_test() ->
       end, [Up, Down]).
 
 assert_block("3.0.6", Actions) ->
-    ?assertEqual([], Actions);
+    ?assertEqual([load_module(gen_rpc_keepalive), load_client()], Actions);
 assert_block(<<".*">>, _Actions) ->
     ok;
 assert_block(Vsn, Actions) ->
-    ?assert(lists:member(load_module(gen_rpc_client), Actions), {Vsn, gen_rpc_client}),
+    ?assert(lists:member(load_client(), Actions), {Vsn, gen_rpc_client}),
+    ?assert(lists:member(load_module(gen_rpc_keepalive), Actions), {Vsn, gen_rpc_keepalive}),
     ?assert(lists:member(load_module(gen_rpc), Actions), {Vsn, gen_rpc}).
+
+load_client() ->
+    {load_module, gen_rpc_client, brutal_purge, soft_purge, [gen_rpc_keepalive]}.
 
 load_module(Module) ->
     {load_module, Module, brutal_purge, soft_purge, []}.

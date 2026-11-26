@@ -165,6 +165,22 @@ try_ordered_cast_start_failure(_Config) ->
 get_config(?MASTER) ->
     {error, simulated_start_failure}.
 
+keepalive_replaces_obsolete_callback(_Config) ->
+    ok = application:set_env(?APP, keepalive_interval, 60),
+    Destination = {?MASTER, ?FUNCTION_NAME},
+    ?MASTER = gen_rpc:call(Destination, erlang, node),
+    Client = gen_rpc_client:where_is(Destination),
+    Obsolete = fun() -> error(obsolete_keepalive_callback) end,
+    {state, Socket, _, _, _, _, _, _} = sys:replace_state(Client, fun(State) ->
+        KeepAlive = element(8, State),
+        setelement(8, State, gen_rpc_keepalive:set_stat_fun(KeepAlive, Obsolete))
+    end),
+    Client ! {keepalive, check},
+    {state, Socket, _, _, _, _, _, {keepalive, StatFun, _, _, _, _, _}} = sys:get_state(Client),
+    ?assertNotEqual(Obsolete, StatFun),
+    ?MASTER = gen_rpc:call(Destination, erlang, node),
+    ?assertEqual(Client, gen_rpc_client:where_is(Destination)).
+
 async_call(_Config) ->
     YieldKey0 = gen_rpc:async_call(?MASTER, os, timestamp, []),
     {_Mega, _Sec, _Micro} = gen_rpc:yield(YieldKey0),
